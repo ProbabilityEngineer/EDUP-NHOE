@@ -121,14 +121,19 @@ bool Profile(std::uintptr_t image, std::size_t& size) noexcept {
   }
   return true;
 }
+template <typename T, std::size_t N> std::string JsonArray(const std::array<T, N>& values) {
+  std::string text = "[";
+  for (std::size_t i = 0; i < N; ++i) text += (i ? "," : "") + std::to_string(values[i]);
+  return text + "]";
+}
 float FeedbackStrength(const std::wstring& path, const wchar_t* section,
-                       const wchar_t* key = L"Strength", long fallback = 60) noexcept {
+                       const wchar_t* key = L"Strength", long fallback = 60, long maximum = 100) noexcept {
   std::array<wchar_t,32> text{};
   GetPrivateProfileStringW(section,key,std::to_wstring(fallback).c_str(),text.data(),static_cast<DWORD>(text.size()),path.c_str());
   wchar_t* end = nullptr; long value = std::wcstol(text.data(),&end,10);
   if (end == text.data() || *end) return static_cast<float>(fallback) / 100.0f;
   if (value < 0) value = 0;
-  if (value > 100) value = 100;
+  if (value > maximum) value = maximum;
   return static_cast<float>(value) / 100.0f;
 }
 void SaveStatus() noexcept {
@@ -188,6 +193,11 @@ void SaveStatus() noexcept {
       ",\"trigger_nonzero_frames\":" + std::to_string(s.trigger_nonzero_frames) +
       ",\"trigger_peak_left_milli\":" + std::to_string(s.trigger_peak_left_milli) +
       ",\"trigger_peak_right_milli\":" + std::to_string(s.trigger_peak_right_milli) +
+      ",\"trigger_consume_config\":" + std::to_string(s.trigger_consume_config) +
+      ",\"trigger_sink_peak_milli\":" + JsonArray(s.trigger_sink_peak_milli) +
+      ",\"trigger_sink_nonzero\":" + JsonArray(s.trigger_sink_nonzero) +
+      ",\"trigger_buffer_peak_milli\":" + JsonArray(s.trigger_buffer_peak_milli) +
+      ",\"trigger_buffer_nonzero\":" + JsonArray(s.trigger_buffer_nonzero) +
       ",\"gameinput_supported_motors\":" + std::to_string(s.gameinput_supported_motors) + ",\"gameinput_trigger_submissions\":" + std::to_string(s.gameinput_trigger_submissions) +
       ",\"trigger_trace_error\":" + std::to_string(s.trigger_trace_error) +
       ",\"trigger_trace_time_limit_reached\":" + std::to_string(s.trigger_trace_time_limit_reached) +
@@ -330,7 +340,7 @@ DWORD WINAPI Run(void*) noexcept {
     if (supplemental_requested)
       StartOnFootFeedback(FeedbackStrength(onfoot_config,L"OnFoot"),ship_requested,
                           FeedbackStrength(onfoot_config,L"ShipCombat"),feedback_requested);
-    SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100));
+    SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100,300));
     const auto consumer = supplemental_requested ? &QueueOnFootInput : nullptr;
     const auto ship_begin = ship_requested ? &BeginShipWeaponInput : nullptr;
     const DWORD source_result = consumer ? StartOnFootEventSources(image,size,true,consumer,ship_begin) :
@@ -412,7 +422,7 @@ DWORD WINAPI Run(void*) noexcept {
         if (ship_requested) {
           ship_allowed = GetPrivateProfileIntW(L"ShipCombat",L"Enabled",0,onfoot_config.c_str()) == 1;
           SetShipWeaponFeedbackStrength(FeedbackStrength(onfoot_config,L"ShipCombat"));
-          SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100));
+          SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100,300));
         }
         const auto capture = GetOnFootEventTraceStats();
         const auto trigger_capture = GetAuthoredTriggerTraceStats();
@@ -540,6 +550,9 @@ RestorationStatus RestorationGetStatus() noexcept {
   result.trigger_consume_two = triggers.consume_two_channel_buffers; result.trigger_consume_four = triggers.consume_four_channel_buffers;
   result.trigger_nonzero_frames = triggers.nonzero_frames;
   result.trigger_peak_left_milli = triggers.peak_left_milli; result.trigger_peak_right_milli = triggers.peak_right_milli;
+  result.trigger_consume_config = triggers.consume_config;
+  result.trigger_sink_peak_milli = triggers.sink_peak_milli; result.trigger_buffer_peak_milli = triggers.buffer_peak_milli;
+  result.trigger_sink_nonzero = triggers.sink_nonzero; result.trigger_buffer_nonzero = triggers.buffer_nonzero;
   result.gameinput_supported_motors = gameinput.supported_motors; result.gameinput_trigger_submissions = gameinput.trigger_submissions;
   result.trigger_trace_error = trigger_trace_error.load();
   result.trigger_trace_time_limit_reached = GetAuthoredTriggerTraceStats().time_limit_reached;

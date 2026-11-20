@@ -23,6 +23,10 @@ struct AuthoredTriggerStats {
   // in thousandths: tells "the game authored nothing" from "output dropped it".
   std::uint64_t nonzero_frames = 0;
   std::uint32_t peak_left_milli = 0, peak_right_milli = 0;
+  // Per channel 0-3: sink values and consumed four-channel buffers.
+  std::uint32_t consume_config = 0;
+  std::array<std::uint32_t, 4> sink_peak_milli{}, buffer_peak_milli{};
+  std::array<std::uint64_t, 4> sink_nonzero{}, buffer_nonzero{};
 };
 
 // Call outside DllMain. The caller must verify the complete game-file hash.

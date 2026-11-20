@@ -2,6 +2,7 @@
 #include "edtrace/ship_weapon_haptics.hpp"
 #include "edtrace/xinput_output.hpp"
 #include <array>
+#include <cmath>
 #include <atomic>
 
 namespace edtrace {
@@ -108,7 +109,9 @@ void QueueOnFootInput(const OnFootInput& input) noexcept {
 }
 void SetOnFootFeedbackStrength(float value) noexcept { strength = HapticUnit(value); }
 void SetShipWeaponFeedbackStrength(float value) noexcept { ship_strength = HapticUnit(value); }
-void SetShipWeaponTriggerStrength(float value) noexcept { ship_trigger_strength = HapticUnit(value); }
+void SetShipWeaponTriggerStrength(float value) noexcept {
+  ship_trigger_strength = std::isfinite(value) && value > 0 ? (value < 3 ? value : 3) : 0;
+}
 void TickOnFootFeedback(bool ready, std::uint64_t now, HapticFrame travel, bool ship_ready) noexcept {
   if (!configured.load(std::memory_order_acquire)) {
     XInputOutputSetOnFootFrame(travel,HapticNonzero(travel));
