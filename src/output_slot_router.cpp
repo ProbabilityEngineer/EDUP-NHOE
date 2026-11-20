@@ -25,14 +25,17 @@ DWORD Exchange(std::uintptr_t slot, MotorBackend expected, MotorBackend value) n
   DWORD old = 0;
   if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), PAGE_READWRITE, &old)) return GetLastError();
   const auto observed = InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), Bits(value), Bits(expected));
+  const bool changed = observed == Bits(expected);
+  const DWORD restore = changed ? RestorableProtection(old) : old;
   DWORD ignored = 0;
-  if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), RestorableProtection(old), &ignored)) {
+  if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), restore, &ignored)) {
     const DWORD error = GetLastError();
-    if (observed == Bits(expected))
+    if (changed)
       InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), Bits(expected), Bits(value));
+    VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), restore, &ignored);
     return error ? error : ERROR_ACCESS_DENIED;
   }
-  return observed == Bits(expected) ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
+  return changed ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
 }
 DWORD RestoreSlot(std::uintptr_t slot, MotorBackend& previous) noexcept {
   if (!previous) return ERROR_SUCCESS;

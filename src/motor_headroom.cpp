@@ -69,6 +69,7 @@ std::atomic<Frame> native_frame{nullptr};
 std::uintptr_t installed_frame_slot = 0;
 std::uintptr_t pending_frame_slot = 0;
 DWORD pending_frame_protection = 0;
+bool pending_frame_exchange = false;
 
 template <typename T> bool Read(std::uintptr_t address, T& value) noexcept {
   if (!address || address > std::numeric_limits<std::uintptr_t>::max()-sizeof(value)) return false;
@@ -102,9 +103,12 @@ DWORD RetryFrameSlotRollback() noexcept {
     const DWORD error = GetLastError();
     return error ? error : ERROR_ACCESS_DENIED;
   }
-  InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(pending_frame_slot),
-                                    reinterpret_cast<void*>(native_frame.load(std::memory_order_acquire)),
-                                    reinterpret_cast<void*>(&UpdateFrame));
+  if (pending_frame_exchange) {
+    InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(pending_frame_slot),
+                                      reinterpret_cast<void*>(native_frame.load(std::memory_order_acquire)),
+                                      reinterpret_cast<void*>(&UpdateFrame));
+    pending_frame_exchange = false;
+  }
   if (VirtualProtect(page,sizeof(void*),pending_frame_protection,&ignored)) {
     pending_frame_slot = 0;
     return ERROR_SUCCESS;
@@ -112,9 +116,10 @@ DWORD RetryFrameSlotRollback() noexcept {
   const DWORD error = GetLastError();
   return error ? error : ERROR_ACCESS_DENIED;
 }
-DWORD QueueFrameSlotRollback(std::uintptr_t address, DWORD protection) noexcept {
+DWORD QueueFrameSlotRollback(std::uintptr_t address, DWORD protection, bool changed) noexcept {
   pending_frame_slot = address;
   pending_frame_protection = protection;
+  pending_frame_exchange = changed;
   const DWORD result = RetryFrameSlotRollback();
   frame_slot_rollback_error.store(result);
   return result;
@@ -134,16 +139,16 @@ DWORD InstallFrameSlot(std::uintptr_t address, std::uintptr_t frame, std::uintpt
     const auto failure = GetLastError();
     return Fail(failure ? failure : ERROR_ACCESS_DENIED);
   }
-  const DWORD restore_protect = RestorableProtection(old_protect);
   original.store(reinterpret_cast<Sender>(sender),std::memory_order_release);
   native_frame.store(reinterpret_cast<Frame>(frame),std::memory_order_release);
   active.store(true,std::memory_order_release);
   const bool changed = InterlockedCompareExchangePointer(slot,replacement,expected) == expected;
+  const DWORD restore_protect = changed ? RestorableProtection(old_protect) : old_protect;
   DWORD ignored = 0;
   if (!VirtualProtect(reinterpret_cast<void*>(address), sizeof(void*), restore_protect, &ignored)) {
     const auto failure = GetLastError();
     active.store(false,std::memory_order_release);
-    const DWORD rollback_error = QueueFrameSlotRollback(address,restore_protect);
+    const DWORD rollback_error = QueueFrameSlotRollback(address,restore_protect,changed);
     return Fail(rollback_error ? rollback_error : failure ? failure : ERROR_ACCESS_DENIED);
   }
   if (!changed) {
@@ -154,7 +159,7 @@ DWORD InstallFrameSlot(std::uintptr_t address, std::uintptr_t frame, std::uintpt
   const bool readable = Read(address,observed);
   if (!readable || observed != replacement) {
     active.store(false,std::memory_order_release);
-    if (!readable) QueueFrameSlotRollback(address,restore_protect);
+    if (!readable) QueueFrameSlotRollback(address,restore_protect,true);
     return Fail(readable ? ERROR_ALREADY_EXISTS : ERROR_NOACCESS);
   }
   installed_frame_slot = address;

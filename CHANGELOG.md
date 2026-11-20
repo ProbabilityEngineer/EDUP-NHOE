@@ -4,6 +4,7 @@
 
 - Keep the amplitude cap for the two authored main-motor channels through a verified audio callback when CrossOver cannot allocate the regular motor-sender hook.
 - Include the original MinHook status and the selected headroom fallback in the startup status.
+- Place MinHook trampolines in the game image's section padding when CrossOver ARM (Wine/FEX) rejects every nearby allocation, so the motor, trigger, on-foot and ship hooks install there. Report the number of such slots.
 
 ## 0.12.1-preview.6 (unreleased)
 

@@ -148,9 +148,11 @@ failed_actuator uses 1/2 for handles and 3/4 for triggers. Engine errors and
 stop reasons are included. API success and frame counts are submission
 observations, not measurements of physical motors.
 
-If MinHook cannot allocate the motor-sender hook, the preview can use the
-game's verified audio frame callback. A headroom_frame_slot value of 1 records
-that the fallback was installed. A headroom value of 1 indicates that the cap
+On ARM CrossOver, the verified game image can supply read/execute trampoline
+space if MinHook cannot allocate nearby. minhook_fallback_slots counts the
+slots in use. If the motor-sender hook still cannot allocate its trampoline,
+the game can use the verified audio frame callback. A headroom_frame_slot
+value of 1 records that fallback. A headroom value of 1 indicates that the cap
 for both authored main-motor channels is active. Check output and
 macos_helper_polls to see which route is active.
 Authored trigger negotiation requires the regular hook path.

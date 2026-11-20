@@ -427,16 +427,7 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
             memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL));
     }
 
-    // EDUP-NHOE: never restore a copy-on-write protection. The write just made
-    // the page private; putting PAGE_*WRITECOPY back can drop that copy and
-    // bring back the image's original bytes. Copy-on-write pages are writable,
-    // so keep write access (a read-only substitute faults later writes).
-    // Keep modifier bits.
-    switch (oldProtect & 0xFF)
-    {
-    case PAGE_WRITECOPY:         oldProtect = PAGE_READWRITE         | (oldProtect & ~0xFFu); break;
-    case PAGE_EXECUTE_WRITECOPY: oldProtect = PAGE_EXECUTE_READWRITE | (oldProtect & ~0xFFu); break;
-    }
+    oldProtect = HookProtectionAfterWrite(pPatchTarget, patchSize, oldProtect);
     VirtualProtect(pPatchTarget, patchSize, oldProtect, &oldProtect);
 
     // Just-in-case measure.
@@ -558,12 +549,26 @@ MH_STATUS WINAPI MH_Uninitialize(VOID)
         status = EnableAllHooksLL(FALSE);
         if (status == MH_OK)
         {
-            // Free the internal function buffer.
+            // Remove each disabled hook as its buffer is released. A failed
+            // protection restore leaves only the remaining hooks for retry.
+            while (g_hooks.size)
+            {
+                UINT pos = g_hooks.size - 1;
+                if (!FreeBuffer(g_hooks.pItems[pos].pTrampoline))
+                {
+                    status = MH_ERROR_MEMORY_PROTECT;
+                    break;
+                }
+                DeleteHookEntry(pos);
+            }
+            if (status == MH_OK && !UninitializeBuffer())
+                status = MH_ERROR_MEMORY_PROTECT;
+        }
 
+        if (status == MH_OK)
+        {
             // HeapFree is actually not required, but some tools detect a false
             // memory leak without HeapFree.
-
-            UninitializeBuffer();
 
             HeapFree(g_hHeap, 0, g_hooks.pItems);
             HeapDestroy(g_hHeap);
@@ -603,16 +608,26 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
                 if (pBuffer != NULL)
                 {
                     TRAMPOLINE ct;
+                    // Generate code for its final address in temporary data.
+                    // An unsupported function never modifies the image tail.
+                    UINT8 code[MEMORY_SLOT_SIZE] = {0};
 
                     ct.pTarget     = pTarget;
                     ct.pDetour     = pDetour;
                     ct.pTrampoline = pBuffer;
-                    if (CreateTrampolineFunction(&ct))
+                    if (!CreateTrampolineFunction(&ct, code))
                     {
-                        // The trampoline may reuse memory an emulator has
-                        // already translated (EDUP-NHOE section padding).
-                        FlushInstructionCache(GetCurrentProcess(), pBuffer, MEMORY_SLOT_SIZE);
-
+                        status = MH_ERROR_UNSUPPORTED_FUNCTION;
+                    }
+                    else if (!CommitBuffer(pBuffer, code))
+                    {
+                        // A rejected fallback slot is an allocation failure
+                        // once cleanup restores the image. Cleanup failure
+                        // below has its own protection error.
+                        status = MH_ERROR_MEMORY_ALLOC;
+                    }
+                    else
+                    {
                         PHOOK_ENTRY pHook = AddHookEntry();
                         if (pHook != NULL)
                         {
@@ -652,15 +667,8 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
                             status = MH_ERROR_MEMORY_ALLOC;
                         }
                     }
-                    else
-                    {
-                        status = MH_ERROR_UNSUPPORTED_FUNCTION;
-                    }
-
-                    if (status != MH_OK)
-                    {
-                        FreeBuffer(pBuffer);
-                    }
+                    if (status != MH_OK && !FreeBuffer(pBuffer))
+                        status = MH_ERROR_MEMORY_PROTECT;
                 }
                 else
                 {
@@ -713,8 +721,10 @@ MH_STATUS WINAPI MH_RemoveHook(LPVOID pTarget)
 
             if (status == MH_OK)
             {
-                FreeBuffer(g_hooks.pItems[pos].pTrampoline);
-                DeleteHookEntry(pos);
+                if (FreeBuffer(g_hooks.pItems[pos].pTrampoline))
+                    DeleteHookEntry(pos);
+                else
+                    status = MH_ERROR_MEMORY_PROTECT;
             }
         }
         else
@@ -953,8 +963,16 @@ const char *WINAPI MH_StatusToString(MH_STATUS status)
 }
 
 //-------------------------------------------------------------------------
-// EDUP-NHOE: number of trampolines placed in section padding because no
-// nearby memory could be allocated.
+// EDUP-NHOE: allow fallback storage in the verified process executable.
+BOOL WINAPI MH_EnableMainImageFallback(VOID)
+{
+    BOOL enabled;
+    EnterSpinLock();
+    enabled = EnableMainImageFallback();
+    LeaveSpinLock();
+    return enabled;
+}
+
 UINT WINAPI MH_GetFallbackSlotsInUse(VOID)
 {
     UINT used;

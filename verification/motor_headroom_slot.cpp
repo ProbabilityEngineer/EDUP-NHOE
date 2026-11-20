@@ -14,6 +14,10 @@ static bool fail_initialization = false;
 static bool fail_first_rollback = false;
 static const void* fail_readback_at = nullptr;
 static const void* fail_protection_at = nullptr;
+static std::uintptr_t* writecopy_slot = nullptr;
+static std::uintptr_t competing_callback = 0;
+static DWORD writecopy_restore = 0;
+static bool opened_writecopy = false;
 extern "C" decltype(&ReadProcessMemory) __real___imp_ReadProcessMemory;
 extern "C" decltype(&VirtualProtect) __real___imp_VirtualProtect;
 static BOOL WINAPI ReadFixtureMemory(HANDLE process, const void* address, void* buffer,
@@ -28,6 +32,19 @@ static BOOL WINAPI ReadFixtureMemory(HANDLE process, const void* address, void* 
   return __real___imp_ReadProcessMemory(process,address,buffer,size,read);
 }
 static BOOL WINAPI ProtectFixtureMemory(void* address, SIZE_T size, DWORD protection, DWORD* old) {
+  if (address == writecopy_slot) {
+    if (!opened_writecopy) {
+      if (!__real___imp_VirtualProtect(address,size,protection,old)) return FALSE;
+      opened_writecopy = true;
+      *old = PAGE_WRITECOPY;
+      if (competing_callback) *writecopy_slot = competing_callback;
+      return TRUE;
+    }
+    // Model the copy-on-write attribute at the Win32 boundary. The fixture
+    // table itself lives in private memory.
+    writecopy_restore = protection;
+    if (protection == PAGE_WRITECOPY) protection = PAGE_READWRITE;
+  }
   if (address == fail_protection_at && protection == PAGE_READWRITE) {
     fail_protection_at = nullptr;
     SetLastError(ERROR_ACCESS_DENIED);
@@ -100,6 +117,8 @@ int main(int argc, char** argv) {
   auto methods = profile::vtable_method_rvas;
   for (auto& method : methods) method += base;
   const bool foreign = argc==2 && std::strcmp(argv[1],"foreign")==0;
+  const bool writecopy_conflict = argc==2 && std::strcmp(argv[1],"writecopy-conflict")==0;
+  const bool writecopy = writecopy_conflict || (argc==2 && std::strcmp(argv[1],"writecopy")==0);
   fail_first_rollback = argc==2 && std::strcmp(argv[1],"readback-retry")==0;
   const bool fail_readback = fail_first_rollback || (argc==2 && std::strcmp(argv[1],"readback")==0);
   fail_initialization = argc==2 && std::strcmp(argv[1],"initialize")==0;
@@ -108,10 +127,22 @@ int main(int argc, char** argv) {
   Protect(image,motor::sender_rva,0x1000-(motor::sender_rva&0xfff),PAGE_EXECUTE_READ);
   Protect(image,profile::vtable_rva,sizeof(methods),PAGE_READONLY);
 
+  if (writecopy) writecopy_slot = reinterpret_cast<std::uintptr_t*>(image+profile::vtable_rva)+6;
+  if (writecopy_conflict) competing_callback = methods[2];
   if (fail_readback) fail_readback_at = image+profile::vtable_rva+6*sizeof(void*);
   const auto result = edtrace::MotorHeadroomStart(base,size,true);
   const auto stats = edtrace::MotorHeadroomGetStats();
   auto* live = reinterpret_cast<std::uintptr_t*>(image+profile::vtable_rva);
+  if (writecopy_conflict) {
+    Check(result==ERROR_ALREADY_EXISTS&&!stats.active&&live[6]==competing_callback&&
+          writecopy_restore==PAGE_WRITECOPY,"a losing swap preserves the foreign callback and original copy protection");
+    return 0;
+  }
+  if (writecopy) {
+    Check(result==ERROR_SUCCESS&&stats.frame_slot&&live[6]!=methods[6]&&writecopy_restore==PAGE_READWRITE,
+          "a winning swap preserves the private table's writability");
+    return 0;
+  }
   if (fail_readback) {
     MEMORY_BASIC_INFORMATION page{};
     Check(result==ERROR_NOACCESS&&!edtrace::MotorHeadroomReady()&&!fail_readback_at,

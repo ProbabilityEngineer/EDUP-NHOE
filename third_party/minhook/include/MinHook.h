@@ -177,7 +177,11 @@ extern "C" {
     // Applies all queued changes in one go.
     MH_STATUS WINAPI MH_ApplyQueued(VOID);
 
-    // EDUP-NHOE: number of trampolines currently placed in module section
+    // EDUP-NHOE: permit verified main-executable code to use its .text tail.
+    // The caller must validate the executable and the affected platform first.
+    BOOL WINAPI MH_EnableMainImageFallback(VOID);
+
+    // EDUP-NHOE: number of trampolines currently placed in executable section
     // padding because no memory could be allocated near their targets.
     UINT WINAPI MH_GetFallbackSlotsInUse(VOID);
 

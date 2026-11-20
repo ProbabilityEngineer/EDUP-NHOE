@@ -36,8 +36,11 @@
 #endif
 
 VOID   InitializeBuffer(VOID);
-VOID   UninitializeBuffer(VOID);
+BOOL   UninitializeBuffer(VOID);
 LPVOID AllocateBuffer(LPVOID pOrigin);
-VOID   FreeBuffer(LPVOID pBuffer);
+BOOL   CommitBuffer(LPVOID buffer, const UINT8 *contents);
+BOOL   FreeBuffer(LPVOID pBuffer);
 BOOL   IsExecutableAddress(LPVOID pAddress);
+BOOL   EnableMainImageFallback(VOID);
+DWORD  HookProtectionAfterWrite(LPVOID patch, SIZE_T size, DWORD protection);
 UINT   GetCaveSlotsInUse(VOID);

@@ -74,7 +74,7 @@ static BOOL IsCodePadding(LPBYTE pInst, UINT size)
 }
 
 //-------------------------------------------------------------------------
-BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
+BOOL CreateTrampolineFunction(PTRAMPOLINE ct, LPBYTE code)
 {
 #if defined(_M_X64) || defined(__x86_64__)
     CALL_ABS call = {
@@ -279,9 +279,9 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
 
         // Avoid using memcpy to reduce the footprint.
 #ifndef ALLOW_INTRINSICS
-        memcpy((LPBYTE)ct->pTrampoline + newPos, pCopySrc, copySize);
+        memcpy(code + newPos, pCopySrc, copySize);
 #else
-        __movsb((LPBYTE)ct->pTrampoline + newPos, (LPBYTE)pCopySrc, copySize);
+        __movsb(code + newPos, (LPBYTE)pCopySrc, copySize);
 #endif
         newPos += copySize;
         oldPos += hs.len;
@@ -313,7 +313,7 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct)
     jmp.address = (ULONG_PTR)ct->pDetour;
 
     ct->pRelay = (LPBYTE)ct->pTrampoline + newPos;
-    memcpy(ct->pRelay, &jmp, sizeof(jmp));
+    memcpy(code + newPos, &jmp, sizeof(jmp));
 #endif
 
     return TRUE;
