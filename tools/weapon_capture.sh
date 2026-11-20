@@ -17,7 +17,7 @@
 # fragment cannon, missile rack. The mod caps a capture at 10 minutes.
 set -u
 
-BOTTLE="Elite-Arm"
+BOTTLE=""
 FIRE=8
 READY=8
 QUIET=6
@@ -32,6 +32,8 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+. "$(dirname "$0")/crossover_bottle.sh"
+BOTTLE="$(edup_bottle "$BOTTLE")" || exit 1
 if [ $# -gt 0 ]; then WEAPONS=("$@"); else
   WEAPONS=("pulse laser" "burst laser" "rail gun" "cannon" "multi-cannon" "fragment cannon" "missile rack")
 fi
@@ -103,4 +105,4 @@ copy_session
 echo
 echo "Capture folder: $OUT"
 ls -la "$OUT" "$OUT/session" 2>/dev/null
-echo "Report: tools/weapon_capture_report.py \"$OUT\""
+echo "Report: tools/weapon_capture_report.py \"$OUT\" \"$(ls \"$OUT\"/session/onfoot-events-*.jsonl 2>/dev/null | head -1)\""

@@ -8,15 +8,17 @@
 # A -dirty describe means uncommitted changes: fine to test, not to send.
 #
 # Usage: tools/build_crossover.sh [--install [BOTTLE]]
-#   --install copies the new DLL into the bottle's Elite folder (default
-#   Elite-Arm); the DLL it replaces is already archived from its own build.
+#   --install copies the new DLL into the bottle's Elite folder (default:
+#   $EDUP_BOTTLE, else the only bottle with Elite installed); the DLL it
+#   replaces is already archived from its own build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build/x64"
 ARCHIVE="$ROOT/build/dinput8-builds"
 INSTALL=""
-if [ "${1:-}" = "--install" ]; then INSTALL="${2:-Elite-Arm}"; fi
+. "$ROOT/tools/crossover_bottle.sh"
+if [ "${1:-}" = "--install" ]; then INSTALL="$(edup_bottle "${2:-}")" || exit 1; fi
 
 # Homebrew's MinGW GCC must win over llvm-mingw's x86_64-w64-mingw32-gcc wrapper.
 export PATH="/opt/homebrew/bin:$PATH"
@@ -29,7 +31,9 @@ fi
 cmake --build "$BUILD" --target dinput_crossover_proxy
 
 DLL="$BUILD/crossover-dinput8/dinput8.dll"
-DESCRIBE=$(sed -n 's/^#define EDUP_BUILD_DESCRIBE "\(.*\)"$/\1/p' "$BUILD/generated/edup_version.h")
+DESCRIBE=$(sed -n 's/^#define EDUP_BUILD_DESCRIBE "\(.*\)"$/\1/p' "$BUILD/generated/edup_version.h" 2>/dev/null || true)
+# Without the version stamp, name the build after the commit instead.
+DESCRIBE=${DESCRIBE:-$(git -C "$ROOT" describe --tags --match "v*" --always --dirty 2>/dev/null || true)}
 DESCRIBE=${DESCRIBE:-unknown}
 BRANCH=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 BUILT=$(date +%Y%m%d-%H%M%S)

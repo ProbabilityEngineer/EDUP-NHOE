@@ -14,7 +14,7 @@
 # Stop with Ctrl-C. Logs: ~/Library/Logs/edup-nhoe-watch/<time>/
 set -u
 
-BOTTLE="Elite-Arm"
+BOTTLE=""
 BOTTLES_DIR="$HOME/Library/Application Support/CrossOver/Bottles"
 INTERVAL=2
 WARN_AT=2000000
@@ -33,6 +33,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+. "$(dirname "$0")/crossover_bottle.sh"
+BOTTLE="$(edup_bottle "$BOTTLE")" || exit 1
 BOTTLE_PATH="$(cd "$BOTTLES_DIR/$BOTTLE" 2>/dev/null && pwd -P)"
 if [ -z "$BOTTLE_PATH" ]; then echo "bottle not found: $BOTTLES_DIR/$BOTTLE" >&2; exit 1; fi
 STATUS_ROOT="$BOTTLE_PATH/drive_c/users/crossover/AppData/Local/Temp/EDRumbleRestoration"
