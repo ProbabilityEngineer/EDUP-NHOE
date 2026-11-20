@@ -599,6 +599,10 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
                     ct.pTrampoline = pBuffer;
                     if (CreateTrampolineFunction(&ct))
                     {
+                        // The trampoline may reuse memory an emulator has
+                        // already translated (EDUP-NHOE section padding).
+                        FlushInstructionCache(GetCurrentProcess(), pBuffer, MEMORY_SLOT_SIZE);
+
                         PHOOK_ENTRY pHook = AddHookEntry();
                         if (pHook != NULL)
                         {
@@ -936,4 +940,16 @@ const char *WINAPI MH_StatusToString(MH_STATUS status)
 #undef MH_ST2STR
 
     return "(unknown)";
+}
+
+//-------------------------------------------------------------------------
+// EDUP-NHOE: number of trampolines placed in section padding because no
+// nearby memory could be allocated.
+UINT WINAPI MH_GetFallbackSlotsInUse(VOID)
+{
+    UINT used;
+    EnterSpinLock();
+    used = GetCaveSlotsInUse();
+    LeaveSpinLock();
+    return used;
 }

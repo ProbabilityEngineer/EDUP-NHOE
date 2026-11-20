@@ -177,6 +177,10 @@ extern "C" {
     // Applies all queued changes in one go.
     MH_STATUS WINAPI MH_ApplyQueued(VOID);
 
+    // EDUP-NHOE: number of trampolines currently placed in module section
+    // padding because no memory could be allocated near their targets.
+    UINT WINAPI MH_GetFallbackSlotsInUse(VOID);
+
     // Translates the MH_STATUS to its name as a string.
     const char * WINAPI MH_StatusToString(MH_STATUS status);
 

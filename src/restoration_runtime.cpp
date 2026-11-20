@@ -8,6 +8,7 @@
 #include "edtrace/mac_output.hpp"
 #endif
 #include "edtrace/motor_headroom.hpp"
+#include "MinHook.h"
 #include "edtrace/motor_ownership.hpp"
 #include "edtrace/natural_probe.hpp"
 #include "edtrace/gameinput_output.hpp"
@@ -136,7 +137,36 @@ void SaveStatus() noexcept {
 #else
       ",\"platform_profile\":\"standard\",\"output_routing\":\"xinput-detour\"" +
 #endif
-      ",\"headroom\":" + std::to_string(s.headroom) + ",\"gain_enabled\":" + std::to_string(s.gain_enabled) +
+      ",\"headroom\":" + std::to_string(s.headroom) +
+      ",\"headroom_error\":" + std::to_string(MotorHeadroomGetStats().installation_error) +
+      ",\"headroom_mh_stage\":" + std::to_string(MotorHeadroomGetStats().mh_stage) +
+      ",\"headroom_mh_status\":" + std::to_string(MotorHeadroomGetStats().mh_status) +
+      ",\"headroom_target\":" + std::to_string(MotorHeadroomGetStats().target) +
+      ",\"headroom_target_protect\":" + std::to_string(MotorHeadroomGetStats().target_protect) +
+      ",\"headroom_target_state\":" + std::to_string(MotorHeadroomGetStats().target_state) +
+      ",\"headroom_detour\":" + std::to_string(MotorHeadroomGetStats().detour) +
+      ",\"headroom_detour_protect\":" + std::to_string(MotorHeadroomGetStats().detour_protect) +
+      ",\"headroom_detour_state\":" + std::to_string(MotorHeadroomGetStats().detour_state) +
+      ",\"headroom_trampoline\":" + std::to_string(MotorHeadroomGetStats().trampoline) +
+      ",\"minhook_fallback_slots\":" + std::to_string(MH_GetFallbackSlotsInUse()) +
+      ",\"headroom_alloc_ran\":" + std::to_string(MotorHeadroomGetStats().alloc.ran) +
+      ",\"headroom_alloc_range_min\":" + std::to_string(MotorHeadroomGetStats().alloc.range_min) +
+      ",\"headroom_alloc_range_max\":" + std::to_string(MotorHeadroomGetStats().alloc.range_max) +
+      ",\"headroom_alloc_granularity\":" + std::to_string(MotorHeadroomGetStats().alloc.granularity) +
+      ",\"headroom_alloc_app_min\":" + std::to_string(MotorHeadroomGetStats().alloc.app_min) +
+      ",\"headroom_alloc_app_max\":" + std::to_string(MotorHeadroomGetStats().alloc.app_max) +
+      ",\"headroom_alloc_free_regions\":" + std::to_string(MotorHeadroomGetStats().alloc.free_regions) +
+      ",\"headroom_alloc_reserved_regions\":" + std::to_string(MotorHeadroomGetStats().alloc.reserved_regions) +
+      ",\"headroom_alloc_committed_regions\":" + std::to_string(MotorHeadroomGetStats().alloc.committed_regions) +
+      ",\"headroom_alloc_free_bytes\":" + std::to_string(MotorHeadroomGetStats().alloc.free_bytes) +
+      ",\"headroom_alloc_largest_free\":" + std::to_string(MotorHeadroomGetStats().alloc.largest_free) +
+      ",\"headroom_alloc_probe_address\":" + std::to_string(MotorHeadroomGetStats().alloc.probe_address) +
+      ",\"headroom_alloc_rwx_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rwx_error) +
+      ",\"headroom_alloc_rw_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rw_error) +
+      ",\"headroom_alloc_rw_to_rx_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rw_to_rx_error) +
+      ",\"headroom_alloc_rw_to_rwx_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rw_to_rwx_error) +
+      ",\"headroom_alloc_rwx_anywhere_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rwx_anywhere_error) +
+      ",\"headroom_alloc_rwx_anywhere_address\":" + std::to_string(MotorHeadroomGetStats().alloc.rwx_anywhere_address) + ",\"gain_enabled\":" + std::to_string(s.gain_enabled) +
       ",\"routing_ready\":" + std::to_string(s.routing_ready) + ",\"stopped\":" + std::to_string(s.stopped) +
       ",\"motor_calls\":" + std::to_string(s.motor_calls) + ",\"wwise_calls\":" + std::to_string(s.wwise_calls) +
       ",\"suppressed_engine_zeros\":" + std::to_string(s.suppressed_engine_zeros) +
