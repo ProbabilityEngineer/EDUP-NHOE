@@ -11,7 +11,7 @@ import struct
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.12.1-preview.5"
+VERSION = "0.12.1-preview.7"
 MAC_COMPANION_VERSION = "0.12.1"
 PLATFORMS = ("windows-x64", "linux-proton-x64", "macos-crossover-x64")
 GAME_SHA256 = "ed5a8f8cd10f9a80d3bda5badd7ba1d4fcfc15996c8c7e018852cb170e264b63"

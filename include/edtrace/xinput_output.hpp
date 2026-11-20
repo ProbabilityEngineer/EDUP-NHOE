@@ -20,6 +20,9 @@ struct XInputOutputStats {
 DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t image_size, bool verified,
                        MotorBackend dynamic_target = nullptr) noexcept;
 bool XInputOutputRefresh() noexcept;
+#ifdef ED_CROSSOVER_COMPAT
+void XInputOutputRequireScopedWwiseFrames() noexcept;
+#endif
 // gain_enabled includes the chosen haptic route's focus. Gamepad focus is
 // separate: a focused VR session must not enable background XInput fallback.
 void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool gamepad_focused = true,

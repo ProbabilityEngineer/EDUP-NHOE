@@ -18,6 +18,9 @@
 namespace edtrace { namespace {
 std::atomic<MotorBackend> original{nullptr};
 std::atomic<bool> installed{false}, ready{false};
+#ifdef ED_CROSSOVER_COMPAT
+std::atomic<bool> require_scoped_wwise{false};
+#endif
 std::atomic<DWORD> error{ERROR_NOT_READY};
 std::atomic<std::uint64_t> calls{0}, wwise_calls{0};
 std::atomic<std::uint64_t> runtime_calls{0}, runtime_nonzero_calls{0};
@@ -99,8 +102,19 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
     wwise_calls.fetch_add(1, std::memory_order_relaxed);
   XINPUT_VIBRATION snapshot{};
   SIZE_T bytes = 0;
-  const bool known = vibration && ReadProcessMemory(GetCurrentProcess(), vibration, &snapshot, sizeof(snapshot), &bytes) && bytes == sizeof(snapshot);
+  bool known = vibration && ReadProcessMemory(GetCurrentProcess(), vibration, &snapshot, sizeof(snapshot), &bytes) && bytes == sizeof(snapshot);
   const bool wwise = writer == Writer::WwiseShared || writer == Writer::WwiseTerminationRetry;
+#ifdef ED_CROSSOVER_COMPAT
+  XINPUT_VIBRATION quiet{};
+  // The game may lose the frame-slot cap while the gain worker is still
+  // restoring gain. Quiet any unscoped request that could carry motor output.
+  if (wwise && require_scoped_wwise.load(std::memory_order_acquire) && !MotorSenderScope::Engaged() &&
+      (!known || snapshot.wLeftMotorSpeed || snapshot.wRightMotorSpeed)) {
+    snapshot = quiet;
+    vibration = &quiet;
+    known = true;
+  }
+#endif
   // Keep mixer updates and their backend submissions in one order. In
   // particular a delayed supplemental expiry cannot overtake an authored stop.
   if (wwise) AcquireSRWLockExclusive(&mixer_lock);
@@ -149,6 +163,11 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
 }}
 
 namespace edtrace {
+#ifdef ED_CROSSOVER_COMPAT
+void XInputOutputRequireScopedWwiseFrames() noexcept {
+  require_scoped_wwise.store(true,std::memory_order_release);
+}
+#endif
 DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t size, bool verified, MotorBackend dynamic_target) noexcept {
   if (!verified || !image || size <= kWwiseRetryReturnRva || !target) return ERROR_REVISION_MISMATCH;
   if (original.load()) return ERROR_ALREADY_INITIALIZED;

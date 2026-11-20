@@ -28,6 +28,7 @@ std::atomic<DWORD> error{0};
 std::wstring output_dir;
 bool registered = false, bank_loaded = false;
 bool session_restoration = false;
+bool (*headroom_ready)() noexcept = nullptr;
 std::atomic<bool> restoration_enabled{false}, restoration_owned{false};
 
 template <typename T> bool Read(std::uintptr_t address, T& value) noexcept {
@@ -107,7 +108,10 @@ bool Load(void*) noexcept {
   bank_loaded = result == 1 && identifier == gain_bank::bank;
   return bank_loaded;
 }
-U32 Post(void*, U32 event) noexcept { return post_event(event, object_id, 0, nullptr, nullptr, 0, nullptr, 0); }
+U32 Post(void*, U32 event) noexcept {
+  if (event == gain_bank::enable_event && headroom_ready && !headroom_ready()) return 0;
+  return post_event(event, object_id, 0, nullptr, nullptr, 0, nullptr, 0);
+}
 bool Marker(const wchar_t* name) {
   const DWORD value = GetFileAttributesW((output_dir + L"\\" + name).c_str());
   return value != INVALID_FILE_ATTRIBUTES && !(value & FILE_ATTRIBUTE_DIRECTORY);
@@ -148,6 +152,7 @@ DWORD WINAPI Run(void*) noexcept {
     GainPhase last = control.phase();
     std::uintptr_t enabled_root_identity = 0;
     while (WaitForSingleObject(stop_event, 50) != WAIT_OBJECT_0) {
+      if (headroom_ready && !headroom_ready()) { error.store(ERROR_NOT_SUPPORTED); break; }
       MotionGainState ready{};
       const bool automatic_ready = session_restoration && State(nullptr, ready) && ready.authored == -96.0f;
       if (!enable_seen && (session_restoration ? automatic_ready : Marker(L"natural-gain-enable.marker"))) {
@@ -233,10 +238,18 @@ DWORD NaturalProbeStop(DWORD timeout_ms) noexcept {
   if (wait == WAIT_TIMEOUT) return ERROR_TIMEOUT;
   return wait == WAIT_OBJECT_0 ? error.load() : GetLastError();
 }
-DWORD NaturalRestorationStart(std::uintptr_t base, bool verified, const std::wstring& directory) noexcept {
+DWORD NaturalRestorationStart(std::uintptr_t base, bool verified, const std::wstring& directory,
+                              bool (*ready)() noexcept) noexcept {
   if (worker) return ERROR_ALREADY_INITIALIZED;
+  if (!ready) return ERROR_INVALID_PARAMETER;
   session_restoration = true;
-  return NaturalProbeStart(base, verified, directory);
+  headroom_ready = ready;
+  const DWORD result = NaturalProbeStart(base, verified, directory);
+  if (result) {
+    headroom_ready = nullptr;
+    session_restoration = false;
+  }
+  return result;
 }
 NaturalRestorationStatus NaturalRestorationGetStatus() noexcept {
   return {error.load(), restoration_enabled.load(std::memory_order_acquire), restoration_owned.load(std::memory_order_acquire)};

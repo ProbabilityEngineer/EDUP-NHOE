@@ -6,6 +6,7 @@
 namespace edtrace { namespace {
 SRWLOCK lifecycle = SRWLOCK_INIT;
 std::uintptr_t import_slot = 0, wwise_slot = 0;
+MotorBackend previous_import = nullptr, previous_wwise = nullptr;
 MotorBackend native_import = nullptr, native_dynamic = nullptr, replacement = nullptr;
 std::atomic<bool> active{false}, available{false};
 std::atomic<DWORD> failure{ERROR_NOT_READY};
@@ -32,6 +33,27 @@ DWORD Exchange(std::uintptr_t slot, MotorBackend expected, MotorBackend value) n
   }
   return observed == Bits(expected) ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS;
 }
+DWORD RestoreSlot(std::uintptr_t slot, MotorBackend& previous) noexcept {
+  if (!previous) return ERROR_SUCCESS;
+  MotorBackend current = nullptr;
+  if (!Read(slot, current)) return ERROR_NOACCESS;
+  if (current == replacement) {
+    const DWORD result = Exchange(slot, replacement, previous);
+    if (result && result != ERROR_ALREADY_EXISTS) return result;
+  }
+  previous = nullptr;
+  return ERROR_SUCCESS;
+}
+DWORD RestoreOwnedSlots() noexcept {
+  available.store(false, std::memory_order_release);
+  faulted = true; // Leave failed restorations retryable without reacquiring the slots.
+  const DWORD audio_error = RestoreSlot(wwise_slot, previous_wwise);
+  const DWORD import_error = RestoreSlot(import_slot, previous_import);
+  const DWORD result = audio_error ? audio_error : import_error;
+  active.store(result != ERROR_SUCCESS, std::memory_order_release);
+  failure.store(result ? result : ERROR_NOT_READY);
+  return result;
+}
 bool Refresh() noexcept {
   available.store(false, std::memory_order_release);
   if (!active.load(std::memory_order_acquire) || faulted) return false;
@@ -46,11 +68,13 @@ bool Refresh() noexcept {
   // is a quiet wait, while a foreign writer is never reclaimed.
   if (!dynamic) { failure.store(ERROR_NOT_READY); return false; }
   if (dynamic != replacement) {
-    if (dynamic != native_dynamic) {
+    if (dynamic != native_dynamic && dynamic != native_import) {
       faulted = true; failure.store(ERROR_ALREADY_EXISTS); return false;
     }
-    const DWORD error = Exchange(wwise_slot, native_dynamic, replacement);
+    // A hybrid loader can use either of the two known XInput bindings.
+    const DWORD error = Exchange(wwise_slot, dynamic, replacement);
     if (error) { faulted = true; failure.store(error); return false; }
+    previous_wwise = dynamic;
   }
   available.store(true, std::memory_order_release); failure.store(ERROR_SUCCESS); return true;
 }
@@ -69,17 +93,21 @@ DWORD OutputSlotsStart(std::uintptr_t image, std::size_t size, bool verified,
   const auto iat = image + kMotorImportSlotRva, audio = image + kMotorWwiseSlotRva;
   DWORD error = ERROR_SUCCESS;
   if (!Read(iat, current_import) || !Read(audio, current_dynamic)) error = ERROR_NOACCESS;
-  else if (current_import != imported || (current_dynamic && current_dynamic != dynamic)) error = ERROR_ALREADY_EXISTS;
+  else if ((current_import != imported && current_import != dynamic) ||
+           (current_dynamic && current_dynamic != dynamic && current_dynamic != imported))
+    error = ERROR_ALREADY_EXISTS;
   if (!error) {
     import_slot = iat; wwise_slot = audio; native_import = imported; native_dynamic = dynamic; replacement = wrapper;
-    error = Exchange(import_slot, native_import, replacement);
+    previous_import = current_import; previous_wwise = nullptr;
+    error = Exchange(import_slot, current_import, replacement);
     if (!error) {
+      faulted = false;
       active.store(true, std::memory_order_release);
       Refresh();
       if (faulted) {
         error = failure.load();
-        Exchange(import_slot, replacement, native_import);
-        active.store(false, std::memory_order_release);
+        const DWORD rollback = RestoreOwnedSlots();
+        if (rollback) error = rollback;
       }
     }
   }
@@ -93,4 +121,12 @@ bool OutputSlotsRefresh() noexcept {
 }
 bool OutputSlotsReady() noexcept { return available.load(std::memory_order_acquire); }
 DWORD OutputSlotsError() noexcept { return failure.load(std::memory_order_acquire); }
+DWORD OutputSlotsStop() noexcept {
+  const DWORD incoming = GetLastError();
+  AcquireSRWLockExclusive(&lifecycle);
+  const DWORD result = active.load(std::memory_order_acquire) ? RestoreOwnedSlots() : ERROR_SUCCESS;
+  ReleaseSRWLockExclusive(&lifecycle);
+  SetLastError(incoming);
+  return result;
+}
 }

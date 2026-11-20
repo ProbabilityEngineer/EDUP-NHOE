@@ -13,4 +13,5 @@ DWORD OutputSlotsStart(std::uintptr_t image, std::size_t size, bool verified,
 bool OutputSlotsRefresh() noexcept;
 bool OutputSlotsReady() noexcept;
 DWORD OutputSlotsError() noexcept;
+DWORD OutputSlotsStop() noexcept;
 }

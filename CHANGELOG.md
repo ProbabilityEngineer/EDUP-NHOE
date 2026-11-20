@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1-preview.7 (unreleased)
+
+- Keep the amplitude cap for the two authored main-motor channels through a verified audio callback when CrossOver cannot allocate the regular motor-sender hook.
+- Include the original MinHook status and the selected headroom fallback in the startup status.
+
+## 0.12.1-preview.6 (unreleased)
+
+- Let the Mac audio output slot use either verified XInput entry point from the loader import or export lookup. Restore the exact binding on shutdown.
+- Add a Mac output mode that tries Core Haptics with XInput fallback. It skips GameInput and preserves the game's controller input.
+- Report the startup stage, motor headroom hook error, and GameInput attempt status in the existing diagnostics.
+
 ## 0.12.1-preview.5
 
 - Give SCO engagement a 2.5-second uneven shake that settles as the ship stabilizes. Disengagement uses a smooth 2.5-second slowdown.

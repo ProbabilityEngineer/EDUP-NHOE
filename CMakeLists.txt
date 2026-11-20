@@ -103,13 +103,19 @@ target_link_libraries(dinput_restoration_chain_proxy PRIVATE "${PREVIOUS_DINPUT_
 add_library(dinput_crossover_proxy SHARED ${RESTORATION_HOST_SOURCES} src/output_slot_router.cpp src/mac_output.cpp)
 trace_settings(dinput_crossover_proxy)
 target_compile_definitions(dinput_crossover_proxy PRIVATE ED_CROSSOVER_COMPAT=1)
-target_link_libraries(dinput_crossover_proxy PRIVATE bcrypt minhook authored_motion_output gameinput_native_compat ws2_32 sco_feedback)
+target_link_libraries(dinput_crossover_proxy PRIVATE bcrypt minhook authored_motion_output gameinput_native_compat ws2_32 sco_feedback xinput9_1_0)
 target_link_options(dinput_crossover_proxy PRIVATE -Wl,--exclude-all-symbols)
 set_target_properties(dinput_crossover_proxy PROPERTIES PREFIX "" OUTPUT_NAME dinput8
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/crossover-dinput8"
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/crossover-dinput8")
 
 if(BUILD_TESTING)
+  add_executable(motor_headroom_slot_verification verification/motor_headroom_slot.cpp src/motor_headroom.cpp)
+  trace_settings(motor_headroom_slot_verification)
+  target_include_directories(motor_headroom_slot_verification PRIVATE third_party/minhook/include)
+  target_compile_definitions(motor_headroom_slot_verification PRIVATE ED_CROSSOVER_COMPAT=1)
+  target_link_options(motor_headroom_slot_verification PRIVATE
+    -Wl,--wrap=__imp_ReadProcessMemory -Wl,--wrap=__imp_VirtualProtect)
   add_executable(onfoot_event_trace_verification verification/onfoot_event_trace.cpp src/onfoot_event_trace.cpp
     src/onfoot_runtime.cpp src/onfoot_haptics.cpp src/ship_weapon_haptics.cpp)
   trace_settings(onfoot_event_trace_verification)

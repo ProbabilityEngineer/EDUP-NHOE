@@ -6,6 +6,10 @@
 #include "edtrace/sco_feedback.hpp"
 #ifdef ED_CROSSOVER_COMPAT
 #include "edtrace/mac_output.hpp"
+#include "edtrace/output_slot_router.hpp"
+// Read the loader-resolved import directly instead of taking the address
+// of MinGW's local XInput import stub.
+extern "C" edtrace::MotorBackend __imp_XInputSetState;
 #endif
 #include "edtrace/motor_headroom.hpp"
 #include "MinHook.h"
@@ -36,10 +40,15 @@ HANDLE stop_event = nullptr, done_event = nullptr, error_event = nullptr;
 std::atomic<DWORD> start_error{ERROR_NOT_READY};
 std::atomic<bool> profile_match{false}, stopped{false};
 std::wstring log_directory;
-std::atomic<DWORD> gameinput_error{ERROR_FILE_NOT_FOUND};
-std::atomic<bool> gameinput_requested{true};
+std::atomic<DWORD> gameinput_error{ERROR_NOT_READY};
+const char* controller_output_mode = "auto";
+const char* startup_stage = "profile";
+bool gameinput_attempted = false;
 std::atomic<DWORD> trigger_hook_error{ERROR_NOT_READY}, trigger_trace_error{ERROR_NOT_READY};
 std::atomic<DWORD> onfoot_trace_error{0};
+#ifdef ED_CROSSOVER_COMPAT
+std::atomic<DWORD> output_restore_error{ERROR_SUCCESS};
+#endif
 constexpr char gameinput_runtime_sha256[] = "156030ed7928791df36ab9033061a151be61251054c45cf3ae65cd460509b04e";
 constexpr char gameinput_helper_sha256[] = "d5d34853ccc9d9f8f19644cf71ffba625d0575bbb80ab19fbc2882b632aee174";
 using GetCapabilitiesFn = DWORD (WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*);
@@ -119,10 +128,17 @@ void SaveStatus() noexcept {
 #endif
       + "\",\"profile_match\":" + std::to_string(s.profile_match) +
       ",\"start_error\":" + std::to_string(s.start_error) + ",\"output_hook\":" + std::to_string(s.output_hook) +
+      ",\"startup_stage\":\"" + startup_stage + "\"" +
       ",\"output_hook_error\":" + std::to_string(XInputOutputGetStats().error) +
-      ",\"controller_output_mode\":\"" + (gameinput_requested.load() ? "auto" : "xinput") + "\"" +
+      ",\"headroom_error\":" + std::to_string(MotorHeadroomGetStats().installation_error) +
+      ",\"headroom_minhook_status\":" + std::to_string(MotorHeadroomGetStats().minhook_status) +
+      ",\"minhook_fallback_slots\":" + std::to_string(MH_GetFallbackSlotsInUse()) +
+      ",\"headroom_frame_slot\":" + std::to_string(MotorHeadroomGetStats().frame_slot) +
+      ",\"headroom_frame_slot_rollback_error\":" + std::to_string(MotorHeadroomGetStats().frame_slot_rollback_error) +
+      ",\"controller_output_mode\":\"" + controller_output_mode + "\"" +
 #ifdef ED_CROSSOVER_COMPAT
       ",\"platform_profile\":\"macos-crossover\",\"output_routing\":\"game-slots\"" +
+      ",\"output_restore_error\":" + std::to_string(output_restore_error.load()) +
       ",\"macos_bridge_error\":" + std::to_string(MacOutputGetStats().error) +
       ",\"macos_launch_error\":" + std::to_string(MacOutputGetStats().launch_error) +
       ",\"macos_helper_launched\":" + std::to_string(MacOutputGetStats().launched) +
@@ -137,40 +153,12 @@ void SaveStatus() noexcept {
 #else
       ",\"platform_profile\":\"standard\",\"output_routing\":\"xinput-detour\"" +
 #endif
-      ",\"headroom\":" + std::to_string(s.headroom) +
-      ",\"headroom_error\":" + std::to_string(MotorHeadroomGetStats().installation_error) +
-      ",\"headroom_mh_stage\":" + std::to_string(MotorHeadroomGetStats().mh_stage) +
-      ",\"headroom_mh_status\":" + std::to_string(MotorHeadroomGetStats().mh_status) +
-      ",\"headroom_target\":" + std::to_string(MotorHeadroomGetStats().target) +
-      ",\"headroom_target_protect\":" + std::to_string(MotorHeadroomGetStats().target_protect) +
-      ",\"headroom_target_state\":" + std::to_string(MotorHeadroomGetStats().target_state) +
-      ",\"headroom_detour\":" + std::to_string(MotorHeadroomGetStats().detour) +
-      ",\"headroom_detour_protect\":" + std::to_string(MotorHeadroomGetStats().detour_protect) +
-      ",\"headroom_detour_state\":" + std::to_string(MotorHeadroomGetStats().detour_state) +
-      ",\"headroom_trampoline\":" + std::to_string(MotorHeadroomGetStats().trampoline) +
-      ",\"minhook_fallback_slots\":" + std::to_string(MH_GetFallbackSlotsInUse()) +
-      ",\"headroom_alloc_ran\":" + std::to_string(MotorHeadroomGetStats().alloc.ran) +
-      ",\"headroom_alloc_range_min\":" + std::to_string(MotorHeadroomGetStats().alloc.range_min) +
-      ",\"headroom_alloc_range_max\":" + std::to_string(MotorHeadroomGetStats().alloc.range_max) +
-      ",\"headroom_alloc_granularity\":" + std::to_string(MotorHeadroomGetStats().alloc.granularity) +
-      ",\"headroom_alloc_app_min\":" + std::to_string(MotorHeadroomGetStats().alloc.app_min) +
-      ",\"headroom_alloc_app_max\":" + std::to_string(MotorHeadroomGetStats().alloc.app_max) +
-      ",\"headroom_alloc_free_regions\":" + std::to_string(MotorHeadroomGetStats().alloc.free_regions) +
-      ",\"headroom_alloc_reserved_regions\":" + std::to_string(MotorHeadroomGetStats().alloc.reserved_regions) +
-      ",\"headroom_alloc_committed_regions\":" + std::to_string(MotorHeadroomGetStats().alloc.committed_regions) +
-      ",\"headroom_alloc_free_bytes\":" + std::to_string(MotorHeadroomGetStats().alloc.free_bytes) +
-      ",\"headroom_alloc_largest_free\":" + std::to_string(MotorHeadroomGetStats().alloc.largest_free) +
-      ",\"headroom_alloc_probe_address\":" + std::to_string(MotorHeadroomGetStats().alloc.probe_address) +
-      ",\"headroom_alloc_rwx_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rwx_error) +
-      ",\"headroom_alloc_rw_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rw_error) +
-      ",\"headroom_alloc_rw_to_rx_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rw_to_rx_error) +
-      ",\"headroom_alloc_rw_to_rwx_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rw_to_rwx_error) +
-      ",\"headroom_alloc_rwx_anywhere_error\":" + std::to_string(MotorHeadroomGetStats().alloc.rwx_anywhere_error) +
-      ",\"headroom_alloc_rwx_anywhere_address\":" + std::to_string(MotorHeadroomGetStats().alloc.rwx_anywhere_address) + ",\"gain_enabled\":" + std::to_string(s.gain_enabled) +
+      ",\"headroom\":" + std::to_string(s.headroom) + ",\"gain_enabled\":" + std::to_string(s.gain_enabled) +
       ",\"routing_ready\":" + std::to_string(s.routing_ready) + ",\"stopped\":" + std::to_string(s.stopped) +
       ",\"motor_calls\":" + std::to_string(s.motor_calls) + ",\"wwise_calls\":" + std::to_string(s.wwise_calls) +
       ",\"suppressed_engine_zeros\":" + std::to_string(s.suppressed_engine_zeros) +
       ",\"gameinput_error\":" + std::to_string(s.gameinput_error) + ",\"gameinput_initialized\":" + std::to_string(s.gameinput_initialized) +
+      ",\"gameinput_attempted\":" + std::to_string(gameinput_attempted) +
       ",\"gameinput_selected\":" + std::to_string(s.gameinput_selected) + ",\"gameinput_matches\":" + std::to_string(s.gameinput_matches) +
       ",\"gameinput_submissions\":" + std::to_string(s.gameinput_submissions) + ",\"gameinput_stops\":" + std::to_string(s.gameinput_stops) +
       ",\"gameinput_runtime_calls\":" + std::to_string(s.gameinput_runtime_calls) + ",\"gameinput_runtime_nonzero_calls\":" + std::to_string(s.gameinput_runtime_nonzero_calls) +
@@ -246,39 +234,59 @@ DWORD WINAPI Run(void*) noexcept {
     std::size_t size = 0;
     if (Hash(Path(nullptr)) != kGameSha256 || !Profile(image, size)) throw DWORD(ERROR_REVISION_MISMATCH);
     profile_match.store(true, std::memory_order_release);
+    const auto executable = Path(nullptr);
+    const auto directory = executable.substr(0, executable.find_last_of(L"\\/"));
+    const auto onfoot_config = directory + L"\\ed-onfoot-haptics.ini";
+    std::array<wchar_t,16> output_mode{};
+    GetPrivateProfileStringW(L"Controller",L"Output",L"auto",output_mode.data(),static_cast<DWORD>(output_mode.size()),onfoot_config.c_str());
+#ifdef ED_CROSSOVER_COMPAT
+    const auto preference = ParseMacOutputPreference(output_mode.data());
+    const bool use_gameinput = preference.gameinput;
+    controller_output_mode = preference.name;
+#else
+    const bool use_gameinput = _wcsicmp(output_mode.data(),L"xinput") != 0;
+    controller_output_mode = use_gameinput ? "auto" : "xinput";
+#endif
+    if (!use_gameinput) gameinput_error.store(ERROR_NOT_SUPPORTED);
+    startup_stage = "xinput_backend";
     std::array<wchar_t, 32768> system{};
     const UINT n = GetSystemDirectoryW(system.data(), static_cast<UINT>(system.size()));
     if (!n || n >= system.size()) throw DWORD(ERROR_BAD_PATHNAME);
     const auto library_path = std::wstring(system.data(), n) + L"\\xinput9_1_0.dll";
     const HMODULE library = LoadLibraryExW(library_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
     if (!library) throw GetLastError();
+    const auto named = GetModuleHandleW(L"xinput9_1_0.dll");
     const auto set = Symbol<MotorBackend>(library, "XInputSetState");
     const auto capabilities = Symbol<GetCapabilitiesFn>(library, "XInputGetCapabilities");
-    // Verify the named lookup; the CrossOver profile separately preserves
-    // the game's import thunk when it differs from GetProcAddress.
-    MotorBackend imported = nullptr;
-    const auto named = GetModuleHandleW(L"xinput9_1_0.dll");
-    if (!set || !capabilities || !named || Symbol<MotorBackend>(named, "XInputSetState") != set ||
-        !Read(image + 0x4db6c60, imported) || !imported) throw DWORD(ERROR_INVALID_FUNCTION);
+    if (!set || !capabilities) throw DWORD(ERROR_INVALID_FUNCTION);
+    startup_stage = "output_hook";
 #ifdef ED_CROSSOVER_COMPAT
-    // The game import and GetProcAddress may use different interop thunks in
-    // an ARM64EC bottle. Preserve the game's own native call binding.
-    result = XInputOutputStart(imported, image, size, true, set);
+    // The proxy's loader-resolved import and the explicit system export
+    // independently identify the two XInput bindings we can safely use.
+    if (named != library) throw DWORD(ERROR_INVALID_FUNCTION);
+    result = XInputOutputStart(__imp_XInputSetState, image, size, true, set);
 #else
-    if (imported != set) throw DWORD(ERROR_INVALID_FUNCTION);
+    MotorBackend imported = nullptr;
+    if (!named || Symbol<MotorBackend>(named, "XInputSetState") != set ||
+        !Read(image + 0x4db6c60, imported) || imported != set)
+      throw DWORD(ERROR_INVALID_FUNCTION);
     result = XInputOutputStart(set, image, size, true);
 #endif
     if (result) throw result;
-    result = MotorHeadroomStart(image, true);
+    startup_stage = "headroom";
+    result = MotorHeadroomStart(image, size, true);
     if (result) throw result;
+    const bool frame_slot_headroom = MotorHeadroomGetStats().frame_slot;
+#ifdef ED_CROSSOVER_COMPAT
+    if (frame_slot_headroom) XInputOutputRequireScopedWwiseFrames();
+#endif
+    startup_stage = "optional_hooks";
     // Negotiate before native sink allocation; existing two-float contexts
     // are diagnosed, never resized in place. Optional failure preserves the
     // verified two-motor restoration instead of disabling that baseline.
-    trigger_hook_error.store(AuthoredTriggersStart(image, size, true));
-    const auto executable = Path(nullptr);
-    const auto directory = executable.substr(0, executable.find_last_of(L"\\/"));
+    trigger_hook_error.store(frame_slot_headroom ? ERROR_NOT_SUPPORTED :
+                             AuthoredTriggersStart(image, size, true));
     onfoot_marker = directory + L"\\ed-onfoot-trace.enable";
-    const auto onfoot_config = directory + L"\\ed-onfoot-haptics.ini";
 #ifdef ED_VR_HAPTICS_MIRROR
     VrOutputStart(GetPrivateProfileIntW(L"VR",L"Enabled",1,(directory+L"\\ed-vr-haptics.ini").c_str())==1);
 #endif
@@ -306,23 +314,35 @@ DWORD WINAPI Run(void*) noexcept {
         StartOnFootEventRecording(log_directory.c_str()) : source_result;
     onfoot_trace_error.store(recording_result);
     if (source_result && supplemental_requested) StopOnFootFeedback();
-    const auto gameinput_path = directory + L"\\GameInputRedist.dll";
-    const auto helper_path = directory + L"\\GameInputRawInputProxy.exe";
-    const auto existing_runtime = GetModuleHandleW(L"GameInputRedist.dll");
-    std::array<wchar_t,16> output_mode{};
-    GetPrivateProfileStringW(L"Controller",L"Output",L"auto",output_mode.data(),static_cast<DWORD>(output_mode.size()),onfoot_config.c_str());
-    gameinput_requested.store(_wcsicmp(output_mode.data(),L"xinput") != 0);
-    if (!gameinput_requested.load()) gameinput_error.store(ERROR_NOT_SUPPORTED);
-    else if (Hash(gameinput_path) == gameinput_runtime_sha256 && Hash(helper_path) == gameinput_helper_sha256 &&
-        (!existing_runtime || Hash(Path(existing_runtime)) == gameinput_runtime_sha256)) {
-      gameinput_error.store(GameInputOutputStart(gameinput_path, XInputOutputNativeBackend()));
-    } else if (GetFileAttributesW(gameinput_path.c_str()) != INVALID_FILE_ATTRIBUTES) gameinput_error.store(ERROR_REVISION_MISMATCH);
+    if (use_gameinput) {
+      startup_stage = "gameinput";
+      const auto gameinput_path = directory + L"\\GameInputRedist.dll";
+      const auto helper_path = directory + L"\\GameInputRawInputProxy.exe";
+      const auto existing_runtime = GetModuleHandleW(L"GameInputRedist.dll");
+      if (Hash(gameinput_path) == gameinput_runtime_sha256 && Hash(helper_path) == gameinput_helper_sha256 &&
+          (!existing_runtime || Hash(Path(existing_runtime)) == gameinput_runtime_sha256)) {
+        gameinput_attempted = true;
 #ifdef ED_CROSSOVER_COMPAT
-    MacOutputStart(directory,log_directory,gameinput_requested.load());
+        gameinput_error.store(ERROR_IO_PENDING);
+        SaveStatus();
 #endif
-    result = NaturalRestorationStart(image, true, log_directory);
+        gameinput_error.store(GameInputOutputStart(gameinput_path, XInputOutputNativeBackend()));
+      } else if (GetFileAttributesW(gameinput_path.c_str()) == INVALID_FILE_ATTRIBUTES ||
+                 GetFileAttributesW(helper_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        gameinput_error.store(GetLastError());
+      } else gameinput_error.store(ERROR_REVISION_MISMATCH);
+    }
+#ifdef ED_CROSSOVER_COMPAT
+    startup_stage = "macos_bridge";
+    SaveStatus();
+    MacOutputStart(directory,log_directory,preference.native);
+#endif
+    startup_stage = "natural_gain";
+    if (!MotorHeadroomReady()) throw MotorHeadroomGetStats().installation_error;
+    result = NaturalRestorationStart(image, true, log_directory, &MotorHeadroomReady);
     if (result) throw result;
     start_error.store(ERROR_SUCCESS, std::memory_order_release);
+    startup_stage = "running";
     bool previous_ready = false; unsigned ticks = 0, control_ticks = 0;
     while (WaitForSingleObject(stop_event, 20) != WAIT_OBJECT_0) {
       XINPUT_CAPABILITIES capability{};
@@ -414,9 +434,28 @@ DWORD WINAPI Run(void*) noexcept {
   if (!StopAuthoredTriggerTrace()) trigger_trace_error.store(ERROR_TIMEOUT);
   if (capture_claim) RetireCaptureRequest(onfoot_marker.c_str(), capture_claim);
   const DWORD restoration = NaturalProbeStop(10000);
+#ifdef ED_CROSSOVER_COMPAT
+  // This only retries a failed frame-slot installation before gain started.
+  MotorHeadroomRetryFrameSlotRollback();
+#endif
   if (restoration) start_error.store(restoration, std::memory_order_release);
+#ifdef ED_CROSSOVER_COMPAT
+  else {
+    DWORD output_restore = OutputSlotsStop();
+    if (output_restore) {
+      Sleep(20);
+      output_restore = OutputSlotsStop();
+    }
+    output_restore_error.store(output_restore, std::memory_order_release);
+  }
+#endif
   stopped.store(true, std::memory_order_release); SaveStatus();
-  if (start_error.load() && error_event) SetEvent(error_event);
+  bool failed = start_error.load() != ERROR_SUCCESS;
+#ifdef ED_CROSSOVER_COMPAT
+  failed = failed || output_restore_error.load() != ERROR_SUCCESS ||
+           MotorHeadroomGetStats().frame_slot_rollback_error != ERROR_SUCCESS;
+#endif
+  if (failed && error_event) SetEvent(error_event);
   SetEvent(done_event); return 0;
 }
 BOOL CALLBACK Start(PINIT_ONCE, PVOID context, PVOID*) noexcept {
@@ -445,7 +484,15 @@ DWORD RestorationStop(DWORD timeout_ms) noexcept {
   SetEvent(stop_event);
   const DWORD wait = WaitForSingleObject(done_event, timeout_ms);
   if (wait == WAIT_TIMEOUT) return ERROR_TIMEOUT;
-  return wait == WAIT_OBJECT_0 ? start_error.load() : GetLastError();
+  if (wait != WAIT_OBJECT_0) return GetLastError();
+  const DWORD error = start_error.load();
+#ifdef ED_CROSSOVER_COMPAT
+  if (!error) {
+    const DWORD rollback = MotorHeadroomGetStats().frame_slot_rollback_error;
+    return rollback ? rollback : output_restore_error.load();
+  }
+#endif
+  return error;
 }
 RestorationStatus RestorationGetStatus() noexcept {
   const auto output = XInputOutputGetStats();

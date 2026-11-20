@@ -73,6 +73,12 @@ def main():
         for mode in ("verified", "unknown"):
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)
             run("crossover_output_" + mode, build / "crossover_output_verification.exe", [backend, mode], result=True)
+        run("crossover_output_alias", build / "crossover_output_verification.exe", [backend, "alias"], result=True)
+        run("motor_headroom_frame_slot", build / "motor_headroom_slot_verification.exe")
+        run("motor_headroom_foreign_slot", build / "motor_headroom_slot_verification.exe", ["foreign"])
+        run("motor_headroom_initialize_failure", build / "motor_headroom_slot_verification.exe", ["initialize"])
+        run("motor_headroom_failed_readback", build / "motor_headroom_slot_verification.exe", ["readback"])
+        run("motor_headroom_rollback_retry", build / "motor_headroom_slot_verification.exe", ["readback-retry"])
         run("dinput_controlled", build / "dinput_proxy_verification.exe",
             [windows(build / "verification/dinput/dinput8.dll"), "controlled"], result=True)
         run("dinput_system", build / "dinput_proxy_verification.exe",

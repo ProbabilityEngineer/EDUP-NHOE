@@ -2,8 +2,19 @@
 #include "edtrace/haptic_frame.hpp"
 #include <windows.h>
 #include <cstdint>
+#include <cwchar>
 #include <string>
 namespace edtrace {
+struct MacOutputPreference {
+  const char* name;
+  bool native;
+  bool gameinput;
+};
+inline MacOutputPreference ParseMacOutputPreference(const wchar_t* setting) noexcept {
+  if (_wcsicmp(setting, L"xinput") == 0) return {"xinput", false, false};
+  if (_wcsicmp(setting, L"macos") == 0) return {"macos", true, false};
+  return {"auto", true, true};
+}
 struct MacOutputStats {
   DWORD error=ERROR_NOT_READY,launch_error=ERROR_NOT_READY,client_error=0;
   bool listening=false,launched=false,active=false,blocks_fallback=false,acquiring=false;

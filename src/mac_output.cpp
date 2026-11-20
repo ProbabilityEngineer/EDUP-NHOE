@@ -122,6 +122,9 @@ DWORD MacOutputStart(const std::wstring& directory,const std::wstring& status_di
       }
     }
   } catch(...) { result=ERROR_NOT_ENOUGH_MEMORY; }
+  if(result) {
+    AcquireSRWLockExclusive(&lock);stats.error=result;ReleaseSRWLockExclusive(&lock);
+  }
   SetLastError(incoming);return result;
 }
 void MacOutputPoll() noexcept {

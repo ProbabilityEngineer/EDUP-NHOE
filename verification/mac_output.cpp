@@ -17,6 +17,12 @@ int wmain(int argc,wchar_t** argv) {
     edtrace::MacOutputStop();Check(VerificationResult("PASS"),"launch result saved");return 0;
   }
   if(argc==2) verification_result_path=argv[1];
+  const auto native=edtrace::ParseMacOutputPreference(L"MaCoS");
+  const auto automatic=edtrace::ParseMacOutputPreference(L"auto");
+  const auto fallback=edtrace::ParseMacOutputPreference(L"xinput");
+  Check(native.native&&!native.gameinput,"macos mode enables the native companion without GameInput");
+  Check(automatic.native&&automatic.gameinput,"auto keeps the existing native and GameInput output paths");
+  Check(!fallback.native&&!fallback.gameinput,"xinput skips both optional output paths");
   Check(edtrace::MacOutputStartControlled(&Clock)==0,"owned relay starts on an ephemeral loopback port");
   const auto info=edtrace::MacOutputGetStats();Check(info.listening&&info.port>0,"owned relay reports its private port");
   SOCKET client=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);Check(client!=INVALID_SOCKET,"synthetic native client socket created");

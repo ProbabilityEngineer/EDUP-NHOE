@@ -83,6 +83,7 @@ int wmain(int argc, wchar_t** argv) {
   const auto retry = SlotStub(image,0x4d05395,audio_slot);
   std::array<BYTE,32> set_before{}; std::memcpy(set_before.data(),reinterpret_cast<void*>(set),set_before.size());
   const auto base = reinterpret_cast<std::uintptr_t>(image);
+  const bool alias_at_start = std::wcscmp(argv[2], L"alias") == 0;
   Check(edtrace::OutputSlotsStart(base,edtrace::kMotorWwiseSlotRva+7,true,set,alternate,engine)==ERROR_REVISION_MISMATCH,
         "truncated image cannot install pointer route");
   Check(edtrace::OutputSlotsStart(base+1,size,true,set,alternate,engine)==ERROR_REVISION_MISMATCH,
@@ -90,7 +91,17 @@ int wmain(int argc, wchar_t** argv) {
   *audio_slot=reinterpret_cast<Set>(static_cast<std::uintptr_t>(0x12345678));
   Check(edtrace::OutputSlotsStart(base,size,true,set,alternate,engine)==ERROR_ALREADY_EXISTS&&*import_slot==set,
         "foreign audio binding rejects installation without changing import");
+  const auto unrelated_export = Symbol<Set>(library, "XInputGetState");
+  *import_slot=unrelated_export; *audio_slot=unrelated_export;
+  Check(edtrace::OutputSlotsStart(base,size,true,set,alternate,retry)==ERROR_ALREADY_EXISTS&&
+        *import_slot==unrelated_export&&*audio_slot==unrelated_export,
+        "another export from the same DLL does not identify the motor function");
   *audio_slot=nullptr;
+  Check(edtrace::OutputSlotsStart(base,size,true,set,alternate,retry)==ERROR_ALREADY_EXISTS&&
+        *import_slot==unrelated_export&&!*audio_slot,
+        "an unknown game import is rejected before the audio slot initializes");
+  *import_slot=alias_at_start ? alternate : set;
+  *audio_slot=alias_at_start ? set : nullptr;
 #else
   const auto engine = Stub(image, 0x5c8535, set);
   const auto wwise = Stub(image, 0x4d05312, set);
@@ -109,11 +120,11 @@ int wmain(int argc, wchar_t** argv) {
 #ifdef ED_CROSSOVER_COMPAT
   Check(!std::memcmp(set_before.data(),reinterpret_cast<void*>(set),set_before.size()),"CrossOver never detours native XInput code");
   if(verified) {
-    Check(!edtrace::XInputOutputRefresh(),"uninitialized audio binding remains quiet");
+    Check(edtrace::XInputOutputRefresh()==alias_at_start,"only an initialized audio binding is ready");
     edtrace::XInputOutputSetReady(true,true);
-    Check(!edtrace::XInputOutputGetStats().ready,"missing audio binding cannot enable output");
+    Check(edtrace::XInputOutputGetStats().ready==alias_at_start,"a verified import alias supports startup without a lookup-address match");
   } else Check(*import_slot==set&&!*audio_slot,"unknown profile changes neither output slot");
-  *audio_slot=alternate;
+  if (!alias_at_start) *audio_slot=alternate;
   if(verified) Check(edtrace::XInputOutputRefresh(),"late audio binding supports a distinct interop thunk");
 #endif
   Check(!std::memcmp(get_before.data(), reinterpret_cast<void*>(get), get_before.size()) &&
@@ -449,15 +460,56 @@ int wmain(int argc, wchar_t** argv) {
     Check(!edtrace::XInputOutputRefresh(),"audio shutdown releases slot readiness");
     edtrace::XInputOutputSetReady(true,true);
     Check(!edtrace::XInputOutputGetStats().ready,"audio shutdown cannot keep output ready");
-    *audio_slot=alternate;
-    Check(edtrace::XInputOutputRefresh(),"recognized audio reinitialization can resume");
-    *audio_slot=reinterpret_cast<Set>(static_cast<std::uintptr_t>(0x12345678));
-    Check(!edtrace::XInputOutputRefresh()&&reinterpret_cast<std::uintptr_t>(*audio_slot)==0x12345678,
-          "foreign audio slot is never overwritten");
-    edtrace::XInputOutputSetReady(true,true);
-    Check(!edtrace::XInputOutputGetStats().ready,"foreign slot ownership faults output quiet");
-    *audio_slot=alternate;
-    Check(!edtrace::XInputOutputRefresh()&&*audio_slot==alternate,"faulted slot route never silently reacquires");
+    *audio_slot=set;
+    Check(edtrace::XInputOutputRefresh(),"audio reinitialization can use the verified game import");
+    if (alias_at_start) {
+      edtrace::XInputOutputSetReady(true,true);
+      edtrace::XInputOutputRequireScopedWwiseFrames();
+      reset();
+      XINPUT_VIBRATION authored{12345,54321};
+      Check(wwise(1,&authored)==ERROR_SUCCESS,"an uncapped authored request is accepted as silence");
+      read(&snapshot);
+      Check(snapshot.set_calls==1&&snapshot.left==0&&snapshot.right==0,
+            "uncapped motor words never reach the backend during the gain handoff");
+      {
+        const edtrace::MotorSenderScope capped(1,1);
+        Check(wwise(1,&authored)==ERROR_SUCCESS,"a capped request is accepted");
+        read(&snapshot);
+        Check(snapshot.set_calls==2&&snapshot.left==12345&&snapshot.right==54321,
+              "capped motor words still reach the backend");
+      }
+      Check(wwise(1,reinterpret_cast<XINPUT_VIBRATION*>(std::uintptr_t{1}))==ERROR_SUCCESS,
+            "an unreadable unscoped request is accepted as silence");
+      read(&snapshot);
+      Check(snapshot.set_calls==3&&snapshot.left==0&&snapshot.right==0&&snapshot.pointer!=1,
+            "an unreadable request never reaches the backend as the original pointer");
+      edtrace::XInputOutputSetReady(false,true);
+      DWORD previous_protection = 0, ignored = 0;
+      Check(VirtualProtect(audio_slot,sizeof(Set),PAGE_NOACCESS,&previous_protection),"fixture hides the owned audio slot");
+      const auto blocked_restore = edtrace::OutputSlotsStop();
+      Check(VirtualProtect(audio_slot,sizeof(Set),previous_protection,&ignored),"fixture restores access to the audio slot");
+      Check(blocked_restore==ERROR_NOACCESS&&*import_slot==alternate&&*audio_slot!=set,
+            "shutdown reports the unreadable slot and restores the independent import");
+      Check(VirtualProtect(import_slot,sizeof(Set),PAGE_NOACCESS,&previous_protection),
+            "fixture hides the already-restored import slot");
+      const auto retried_restore = edtrace::OutputSlotsStop();
+      Check(VirtualProtect(import_slot,sizeof(Set),previous_protection,&ignored),
+            "fixture restores access to the import slot");
+      Check(retried_restore==ERROR_SUCCESS&&*audio_slot==set,
+            "shutdown retry restores the audio slot without touching the released import");
+    }
+    if (!alias_at_start) {
+      *audio_slot=unrelated_export;
+      Check(!edtrace::XInputOutputRefresh()&&*audio_slot==unrelated_export,
+            "foreign audio slot is never overwritten");
+      edtrace::XInputOutputSetReady(true,true);
+      Check(!edtrace::XInputOutputGetStats().ready,"foreign slot ownership faults output quiet");
+      *audio_slot=alternate;
+      Check(!edtrace::XInputOutputRefresh()&&*audio_slot==alternate,"faulted slot route never silently reacquires");
+    }
+    Check(edtrace::OutputSlotsStop()==ERROR_SUCCESS&&!edtrace::OutputSlotsReady()&&
+          *import_slot==(alias_at_start ? alternate : set)&&
+          *audio_slot==(alias_at_start ? set : alternate),"shutdown restores exact owned bindings and preserves a replaced slot");
   }
   Check(!std::memcmp(set_before.data(),reinterpret_cast<void*>(set),set_before.size()),"all CrossOver output leaves native API body untouched");
 #endif

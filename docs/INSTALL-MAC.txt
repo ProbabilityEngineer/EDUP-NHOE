@@ -1,44 +1,71 @@
-EDUP - NHOE 0.12.1 PREVIEW - MAC / CROSSOVER DRAG-AND-DROP
+EDUP - NHOE 0.12.1-PREVIEW.7 - MAC / CROSSOVER DRAG-AND-DROP
 
 The native four-motor companion requires macOS 11.3 or newer. Its universal
-binary supports Apple silicon and Intel. The previous Mac XInput route is
-user-confirmed; native four-motor output still needs physical testing.
+binary supports Apple silicon and Intel. A tester felt rumble in an Intel
+bottle with the controller in XInput mode. Native four-motor playback and
+ARM/FEX rumble still need hardware confirmation.
 
 INSTALL
 1. Close Elite and the Frontier launcher. In CrossOver, select Elite's bottle
    and use Open C: Drive. Find the folder containing EliteDangerous64.exe,
    normally Products/elite-dangerous-odyssey-64. Back up matching mod files.
-2. Copy the CONTENTS of Copy-to-game beside EliteDangerous64.exe: five loose
-   files and ed-macos-haptics.app. Keep the app intact. Retain your existing
-   ed-onfoot-haptics.ini. Stop first if an unrelated/chained dinput8.dll exists;
-   this package does not supply a chain variant or merge other mods.
+2. Check for an existing dinput8.dll before copying. If it belongs to another
+   mod or a chained installation, keep it in place and stop here. For a
+   standalone install or upgrade from this Mac package, copy the five loose
+   files and ed-macos-haptics.app from Copy-to-game beside EliteDangerous64.exe.
+   Keep the app intact and retain your existing ed-onfoot-haptics.ini.
 3. In the SAME bottle, open Wine Configuration (Control Panels), Libraries.
    Add/select dinput8, click Edit, choose Native then Builtin, and save.
    Record any previous override before changing it. An existing correct
    override does not need to be changed again.
-4. Connect your Xbox controller, then open ed-macos-haptics.app in Finder.
-   The capability check allows up to three seconds for discovery and
-   sends NO vibration. The app is ad hoc signed, not Developer ID notarized.
-   If macOS blocks it, use System Settings > Privacy & Security > Open Anyway
-   when offered, then open it again. Do not disable Gatekeeper globally.
-   If GameController reports zero, choose Retry with the controller active.
-5. Close the check and leave [Controller] Output=auto
-   in ed-onfoot-haptics.ini, then launch Elite normally. The companion starts
-   automatically in the background and exits after the game stops responding.
-   Do not manually run the GameInput files or configure a network address.
+4. Connect your controller in its default XInput mode. Choose an Output value
+   from RECOMMENDED CONFIGURATION and set it under [Controller] in
+   ed-onfoot-haptics.ini. Use the configuration beside EliteDangerous64.exe.
+5. For Output=auto or Output=macos, open ed-macos-haptics.app in Finder once.
+   The capability check allows up to three seconds for discovery and sends no
+   vibration. If macOS blocks the ad hoc signed app, use System Settings >
+   Privacy & Security > Open Anyway when offered, then open it again.
+   If it reports zero controllers, choose Retry with the controller active.
+6. Close the capability check and launch Elite normally. The native companion
+   starts automatically when enabled and exits after the game stops responding.
 
 Keep your working Steam Input, controller bindings and graphics setup.
 No d3d11.dll, DXMT, DXVK or ED-UP changes are needed. Leave Wine's XInput
 libraries in use. No additional XInput override or Linux wrapper is needed.
 No Windows driver, Bluetooth scanner, input mapper or service is installed.
 
+RECOMMENDED CONFIGURATION
+Edit the existing [Controller] section. Add it if missing. Set one Output value
+and fully restart Elite after each change.
+
+  Intel/Rosetta bottle, or a setup that already works with auto
+    Output=auto
+    Start here for native four-motor output with GameInput and XInput available
+    as fallbacks. This is the packaged default.
+
+  Apple silicon ARM/FEX bottle, or GameInput fails during startup
+    Output=macos
+    Start here to try native four-motor output with two-motor XInput fallback.
+    This mode skips GameInput. ARM/FEX game-side haptics are experimental.
+
+  Two-motor compatibility test, or isolating native companion issues
+    Output=xinput
+    Use XInput vibration only. This skips GameInput and the native companion.
+    In the ARM/FEX bottle, this tests the game's two-motor route on its own.
+
+Keep the controller in XInput mode for all three settings. The Output setting
+changes vibration only. In the reported DInput tests on both bottle engines,
+Elite loaded the controller bindings while the buttons and sticks stayed
+inactive with or without this mod. Switch the controller back to XInput before
+testing vibration.
+
 NATIVE FOUR-MOTOR OUTPUT
 The native companion queries Apple's GameController framework. For automatic
 selection, it requires exactly one visible native controller with an Xbox
 profile, four advertised individual actuator locations, four working engines,
-and exactly one connected XInput gamepad in the game. This is a conservative
-selection policy, not proof of a native-to-Windows controller identity match.
-Multiple controllers or virtual duplicates keep native output unselected.
+and a single gamepad at XInput index 0. Multiple controllers or virtual
+duplicates keep native output unselected. A virtual XInput device can still
+meet the single-device check while macOS exposes a different physical pad.
 
 Channels map separately: low-frequency body to left handle, high-frequency
 body to right handle, left trigger to left trigger, right trigger to right
@@ -53,11 +80,6 @@ connection notifications and metadata are used only for output selection.
 It omits VR adapters, OpenXR registration and Linux HID/xpadneo code.
 
 FALLBACK AND SAFETY
-If native discovery, launch or playback fails, the existing GameInput/XInput
-fallback remains available. XInput supports the two main motors. Output=auto
-allows automatic native selection; Output=xinput skips BOTH native Mac output
-and GameInput. Change it and fully restart Elite to force the known fallback.
-
 There is a brief quiet interval during provider changes. Frames expire,
 requests are finite, and loss of the game heartbeat stops the companion.
 Repeated playback errors back off and eventually disable native attempts
@@ -72,8 +94,12 @@ The supplied ed-onfoot-haptics.ini starts with:
   [SCO]
   Enabled=1
   Strength=60
+  [ShipCombat]
+  Enabled=1
+  Strength=60
   [Controller]
   Output=auto
+Use RECOMMENDED CONFIGURATION to select the Output value for your bottle.
 SCO feedback is enabled at 60%, including with a preserved older INI.
 It uses the game's local Status.json in the bottle or Windows Saved Games
 folder. Engagement shakes the main motors unevenly and settles over 2.5
@@ -98,18 +124,22 @@ Set ShipCombat Enabled=0 to turn it off. For authored effects only, set
 Enabled=0 under [OnFoot], [SCO] and [ShipCombat].
 Quiet authored Motion samples can now reach the main motors below the old cutoff.
 Walking contacts stay disabled; running/sprinting remain enabled where mapped.
-Keep your existing settings when upgrading, but change a previously forced
-Output=xinput to auto if you want to try native four-motor output.
 
 DIAGNOSTICS
-Opening the app manually shows the detected device, controller count,
-actuator mask and engine readiness without vibrating. During a normal game launch, two status files
-are written in the bottle's Windows temporary directory:
+Opening the app manually shows the detected device, controller count, actuator
+mask and engine readiness. During a normal game launch, check the newest
+session in the bottle's Windows temporary directory:
   %TEMP%\EDRumbleRestoration\<session>\restoration-status.json
   %TEMP%\EDRumbleRestoration\<session>\macos-haptics-status.json
-Use the newest session. The host output is macos-corehaptics when native is
-selected, macos-handoff during a transition, or gameinput/xinput for fallback.
+The host reports macos-corehaptics when native output is active, macos-handoff
+during a transition, or gameinput/xinput during fallback.
 macos_helper_polls > 0 confirms the companion connected to this game session.
+startup_stage and the hook errors show where initialization stopped.
+output_restore_error reports whether a game output slot still needs cleanup
+after shutdown. The stopped proxy keeps forwarding calls if cleanup fails.
+gameinput_attempted marks when startup reaches the GameInput load attempt.
+For Output=macos or Output=xinput, expect gameinput_attempted=0. For
+Output=xinput, the native companion status file is absent by design.
 
 Native status codes: 0 = no current error (also check ready); 1 = no native controller;
 2 = multiple controllers; 3 = sole controller is not Xbox;
@@ -118,11 +148,26 @@ failed_actuator uses 1/2 for handles and 3/4 for triggers. Engine errors and
 stop reasons are included. API success and frame counts are submission
 observations, not measurements of physical motors.
 
-If there is no native status file, check first-launch app approval and keep
-using the XInput fallback. Include both status files, Mac model/CPU, macOS and
-CrossOver versions, bottle engine (Rosetta or ARM64EC/FEX), controller model,
-connection, Steam Input state and tested action in feedback. Do not share
-login logs. Background Core Haptics delivery still needs real Mac testing.
+If MinHook cannot allocate the motor-sender hook, the preview can use the
+game's verified audio frame callback. A headroom_frame_slot value of 1 records
+that the fallback was installed. A headroom value of 1 indicates that the cap
+for both authored main-motor channels is active. Check output and
+macos_helper_polls to see which route is active.
+Authored trigger negotiation requires the regular hook path.
+headroom_minhook_status records the original MinHook result.
+headroom_frame_slot_rollback_error reports a callback or page protection
+that could not be restored during startup rollback.
+
+If you selected auto or macos and the native status file is missing, check
+first-launch app approval and macos_launch_error in restoration-status.json.
+If controls fail in XInput mode, compare one launch with dinput8 set to
+Builtin (Wine) in the same bottle. This bypasses the mod. Restore Native then
+Builtin afterward.
+
+For feedback, share the two status files if available and name any missing
+file. Include the selected Output value, Mac model and CPU, macOS and
+CrossOver versions, bottle engine, controller model and connection, Steam
+Input state, and the action tested.
 
 SUPPORTED GAME
 EliteDangerous64.exe version: 2026.10.23.334925
