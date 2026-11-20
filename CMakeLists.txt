@@ -75,8 +75,20 @@ set(RESTORATION_HOST_SOURCES src/dinput_proxy.cpp src/restoration_runtime.cpp sr
   src/gameinput_output.cpp src/natural_probe.cpp src/motor_headroom.cpp src/motor_ownership.cpp
   src/authored_trigger_trace.cpp src/onfoot_event_trace.cpp src/onfoot_haptics.cpp src/onfoot_runtime.cpp
   src/ship_weapon_haptics.cpp src/dinput8.def)
+# Build identity (git describe) for restoration-status.json, refreshed on every build.
+set(EDUP_VERSION_HEADER "${CMAKE_BINARY_DIR}/generated/edup_version.h")
+add_custom_target(edup_version
+  COMMAND "${CMAKE_COMMAND}" -DSRC=${CMAKE_CURRENT_SOURCE_DIR} -DOUT=${EDUP_VERSION_HEADER}
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake"
+  BYPRODUCTS "${EDUP_VERSION_HEADER}" VERBATIM)
+function(stamp_version target)
+  add_dependencies(${target} edup_version)
+  target_include_directories(${target} PRIVATE "${CMAKE_BINARY_DIR}/generated")
+endfunction()
+
 function(runtime_target target directory)
   trace_settings(${target})
+  stamp_version(${target})
   target_link_libraries(${target} PRIVATE bcrypt minhook authored_motion_output gameinput_compat sco_feedback)
   target_link_options(${target} PRIVATE -Wl,--exclude-all-symbols)
   set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME dinput8
@@ -102,6 +114,7 @@ target_link_libraries(dinput_restoration_chain_proxy PRIVATE "${PREVIOUS_DINPUT_
 # routing through game-side slots instead of detouring native Wine libraries.
 add_library(dinput_crossover_proxy SHARED ${RESTORATION_HOST_SOURCES} src/output_slot_router.cpp src/mac_output.cpp)
 trace_settings(dinput_crossover_proxy)
+stamp_version(dinput_crossover_proxy)
 target_compile_definitions(dinput_crossover_proxy PRIVATE ED_CROSSOVER_COMPAT=1)
 target_link_libraries(dinput_crossover_proxy PRIVATE bcrypt minhook authored_motion_output gameinput_native_compat ws2_32 sco_feedback xinput9_1_0)
 target_link_options(dinput_crossover_proxy PRIVATE -Wl,--exclude-all-symbols)
