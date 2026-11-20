@@ -20,6 +20,7 @@ struct MacOutputStats {
   bool listening=false,launched=false,active=false,blocks_fallback=false,acquiring=false;
   unsigned controllers=0,motors=0,port=0;
   std::uint64_t polls=0,frames=0,generation=0;
+  std::uint64_t trigger_frames=0; // frames sent to the companion with a non-zero trigger channel
 };
 DWORD MacOutputStart(const std::wstring& directory,const std::wstring& status_directory,bool enabled) noexcept;
 // Worker thread only. Audio callbacks update a bounded latest frame, never I/O.

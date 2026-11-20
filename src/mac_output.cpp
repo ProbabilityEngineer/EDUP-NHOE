@@ -141,7 +141,7 @@ bool MacOutputSubmit(HapticFrame frame) noexcept {
   const DWORD incoming=GetLastError();
   if(!TryAcquireSRWLockExclusive(&lock)) { SetLastError(incoming);return blocked.load(std::memory_order_acquire); }
   const bool handled=route.BlocksFallback();
-  if(route.Active()) { latest=HapticScale(frame,1);latest_at=clock_now();latest_known=true;++stats.frames; }
+  if(route.Active()) { latest=HapticScale(frame,1);latest_at=clock_now();latest_known=true;++stats.frames;if(latest.left>0||latest.right>0) ++stats.trigger_frames; }
   ReleaseSRWLockExclusive(&lock);SetLastError(incoming);return handled;
 }
 MacOutputStats MacOutputGetStats() noexcept {

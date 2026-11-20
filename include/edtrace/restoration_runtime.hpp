@@ -15,6 +15,8 @@ struct RestorationStatus {
   DWORD trigger_hook_error = ERROR_NOT_READY, trigger_hook_ready = 0, trigger_contexts = 0;
   std::uint64_t trigger_negotiated = 0, trigger_frames = 0, trigger_late_frames = 0;
   std::uint64_t trigger_consume_two = 0, trigger_consume_four = 0;
+  std::uint64_t trigger_nonzero_frames = 0;
+  std::uint32_t trigger_peak_left_milli = 0, trigger_peak_right_milli = 0;
   DWORD gameinput_supported_motors = 0;
   std::uint64_t gameinput_trigger_submissions = 0;
   DWORD trigger_trace_error = ERROR_NOT_READY;

@@ -28,7 +28,13 @@ std::atomic<DWORD> started{0}, error{ERROR_NOT_READY}, installed_mask{0};
 std::atomic<std::uint64_t> init_calls{0}, negotiated{0}, initialization_failures{0};
 std::atomic<std::uint64_t> context_overflows{0}, frame_calls{0}, valid_frames{0}, unknown_frames{0};
 std::atomic<std::uint64_t> two_channel_frames{0}, nonfinite_frames{0}, clamped_channels{0}, term_calls{0};
-std::atomic<std::uint64_t> consume_two{0}, consume_four{0};
+std::atomic<std::uint64_t> consume_two{0}, consume_four{0}, nonzero_frames{0};
+std::atomic<std::uint32_t> peak_left{0}, peak_right{0};
+void Peak(std::atomic<std::uint32_t>& peak, float value) noexcept {
+  const auto milli = static_cast<std::uint32_t>(value * 1000.0f);
+  auto seen = peak.load(std::memory_order_relaxed);
+  while (milli > seen && !peak.compare_exchange_weak(seen, milli, std::memory_order_relaxed)) {}
+}
 constexpr std::array<unsigned char, 32> consume_signature{{
   0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x6c,0x24,0x20,0x56,0x57,0x8b,0x79,0x0c,0x33,
   0xed,0x89,0x69,0x08,0x48,0x8b,0xf2,0x8b,0x42,0x08,0x4c,0x8b,0xd9,0x0f,0xb6,0xc0
@@ -137,6 +143,8 @@ void WINAPI Update(void* self) noexcept {
           if (std::isfinite(values[0]) && std::isfinite(values[1])) {
             current = {true, Bound(values[0]), Bound(values[1])};
             valid_frames.fetch_add(1, std::memory_order_relaxed);
+            if (current.left > 0 || current.right > 0) nonzero_frames.fetch_add(1, std::memory_order_relaxed);
+            Peak(peak_left, current.left); Peak(peak_right, current.right);
           } else nonfinite_frames.fetch_add(1, std::memory_order_relaxed);
         }
       }
@@ -305,6 +313,8 @@ AuthoredTriggerStats AuthoredTriggersGetStats() noexcept {
   result.existing_two_channel_frames = two_channel_frames.load(); result.nonfinite_frames = nonfinite_frames.load();
   result.clamped_channels = clamped_channels.load(); result.term_calls = term_calls.load();
   result.consume_two_channel_buffers = consume_two.load(); result.consume_four_channel_buffers = consume_four.load();
+  result.nonzero_frames = nonzero_frames.load();
+  result.peak_left_milli = peak_left.load(); result.peak_right_milli = peak_right.load();
   return result;
 }
 }  // namespace edtrace

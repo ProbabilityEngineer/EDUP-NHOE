@@ -19,6 +19,10 @@ struct AuthoredTriggerStats {
   std::uint64_t existing_two_channel_frames = 0, nonfinite_frames = 0;
   std::uint64_t clamped_channels = 0, term_calls = 0;
   std::uint64_t consume_two_channel_buffers = 0, consume_four_channel_buffers = 0;
+  // Valid frames with a non-zero trigger channel, and the peak of each channel
+  // in thousandths: tells "the game authored nothing" from "output dropped it".
+  std::uint64_t nonzero_frames = 0;
+  std::uint32_t peak_left_milli = 0, peak_right_milli = 0;
 };
 
 // Call outside DllMain. The caller must verify the complete game-file hash.

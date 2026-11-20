@@ -160,6 +160,7 @@ void SaveStatus() noexcept {
       ",\"macos_helper_launched\":" + std::to_string(MacOutputGetStats().launched) +
       ",\"macos_helper_polls\":" + std::to_string(MacOutputGetStats().polls) +
       ",\"macos_frames\":" + std::to_string(MacOutputGetStats().frames) +
+      ",\"macos_trigger_frames\":" + std::to_string(MacOutputGetStats().trigger_frames) +
       ",\"macos_client_error\":" + std::to_string(MacOutputGetStats().client_error) +
       ",\"macos_native_active\":" + std::to_string(MacOutputGetStats().active) +
       ",\"macos_blocks_fallback\":" + std::to_string(MacOutputGetStats().blocks_fallback) +
@@ -183,6 +184,9 @@ void SaveStatus() noexcept {
       ",\"trigger_contexts\":" + std::to_string(s.trigger_contexts) + ",\"trigger_negotiated\":" + std::to_string(s.trigger_negotiated) +
       ",\"trigger_frames\":" + std::to_string(s.trigger_frames) + ",\"trigger_late_frames\":" + std::to_string(s.trigger_late_frames) +
       ",\"trigger_consume_two\":" + std::to_string(s.trigger_consume_two) + ",\"trigger_consume_four\":" + std::to_string(s.trigger_consume_four) +
+      ",\"trigger_nonzero_frames\":" + std::to_string(s.trigger_nonzero_frames) +
+      ",\"trigger_peak_left_milli\":" + std::to_string(s.trigger_peak_left_milli) +
+      ",\"trigger_peak_right_milli\":" + std::to_string(s.trigger_peak_right_milli) +
       ",\"gameinput_supported_motors\":" + std::to_string(s.gameinput_supported_motors) + ",\"gameinput_trigger_submissions\":" + std::to_string(s.gameinput_trigger_submissions) +
       ",\"trigger_trace_error\":" + std::to_string(s.trigger_trace_error) +
       ",\"trigger_trace_time_limit_reached\":" + std::to_string(s.trigger_trace_time_limit_reached) +
@@ -531,6 +535,8 @@ RestorationStatus RestorationGetStatus() noexcept {
   result.trigger_contexts = static_cast<DWORD>(triggers.registered_contexts);
   result.trigger_negotiated = triggers.negotiated; result.trigger_frames = triggers.valid_frames; result.trigger_late_frames = triggers.existing_two_channel_frames;
   result.trigger_consume_two = triggers.consume_two_channel_buffers; result.trigger_consume_four = triggers.consume_four_channel_buffers;
+  result.trigger_nonzero_frames = triggers.nonzero_frames;
+  result.trigger_peak_left_milli = triggers.peak_left_milli; result.trigger_peak_right_milli = triggers.peak_right_milli;
   result.gameinput_supported_motors = gameinput.supported_motors; result.gameinput_trigger_submissions = gameinput.trigger_submissions;
   result.trigger_trace_error = trigger_trace_error.load();
   result.trigger_trace_time_limit_reached = GetAuthoredTriggerTraceStats().time_limit_reached;
