@@ -18,6 +18,8 @@ std::uint64_t latest_at=0,last_sequence=0;
 sockaddr_in peer{};
 MacOutputStats stats;
 std::atomic<bool> blocked{false};
+macbridge::Relaunch relaunch;
+std::wstring launch_directory,launch_status_directory;
 std::uint64_t Now() noexcept { return GetTickCount64(); }
 std::uint64_t (*clock_now)() noexcept=&Now;
 
@@ -40,15 +42,16 @@ std::wstring UnixName(const std::wstring& path) {
   if(size>1) { result.resize(static_cast<std::size_t>(size));MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,name,-1,result.data(),size);result.pop_back(); }
   HeapFree(GetProcessHeap(),0,name);return result;
 }
-DWORD Launch(const std::wstring& directory,const std::wstring& status_directory,const std::wstring& opener=L"\\\\?\\unix/usr/bin/open") {
+DWORD Launch(const std::wstring& directory,const std::wstring& status_directory,const macbridge::Token& key,unsigned port,
+             const std::wstring& opener=L"\\\\?\\unix/usr/bin/open") {
   const auto application=UnixName(directory+L"\\ed-macos-haptics.app");
   const auto output=UnixName(status_directory);
   if(application.empty()||output.empty()) return ERROR_FILE_NOT_FOUND;
   constexpr wchar_t hex[]=L"0123456789abcdef";
-  std::wstring text;for(const auto b:token) { text+=hex[b>>4];text+=hex[b&15]; }
+  std::wstring text;for(const auto b:key) { text+=hex[b>>4];text+=hex[b&15]; }
   // Wine's CreateProcess supports non-PE Unix executables. Use the absolute
   // system launcher directly; there is no shell, PATH search or activation.
-  std::wstring command=Quote(opener)+L" -g -n -a "+Quote(application)+L" --args --port "+std::to_wstring(stats.port)+
+  std::wstring command=Quote(opener)+L" -g -n -a "+Quote(application)+L" --args --port "+std::to_wstring(port)+
     L" --token "+text+L" --status "+Quote(output+L"/macos-haptics-status.json");
   STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION process{};
   if(!CreateProcessW(opener.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,directory.c_str(),&startup,&process)) return GetLastError();
@@ -92,7 +95,7 @@ void PollLocked() noexcept {
     if(size!=sizeof(source)||source.sin_family!=AF_INET||source.sin_addr.s_addr!=htonl(INADDR_LOOPBACK)||
        !macbridge::Decode(bytes,static_cast<std::size_t>(count),message)||message.kind!=macbridge::Kind::Poll||message.token!=token||
        (peer_known&&source.sin_port!=peer.sin_port)||message.sequence<=last_sequence) continue;
-    peer=source;peer_known=true;last_sequence=message.sequence;++stats.polls;
+    peer=source;peer_known=true;last_sequence=message.sequence;++stats.polls;relaunch.Seen(clock_now());
     stats.controllers=message.controllers;stats.motors=message.motors;stats.client_error=message.error;
     const auto now=clock_now();route.Observe(message,now);SnapshotRoute();
     macbridge::Message reply{};reply.kind=closing?macbridge::Kind::Stop:macbridge::Kind::Frame;
@@ -117,8 +120,10 @@ DWORD MacOutputStart(const std::wstring& directory,const std::wstring& status_di
       else result=StartChannel();
       stats.error=result;ReleaseSRWLockExclusive(&lock);
       if(!result) {
-        const auto launch=Launch(directory,status_directory);
-        AcquireSRWLockExclusive(&lock);stats.launch_error=launch;stats.launched=launch==ERROR_SUCCESS;ReleaseSRWLockExclusive(&lock);
+        const auto launch=Launch(directory,status_directory,token,stats.port);
+        AcquireSRWLockExclusive(&lock);stats.launch_error=launch;stats.launched=launch==ERROR_SUCCESS;
+        if(stats.launched) { launch_directory=directory;launch_status_directory=status_directory;relaunch.Launched(clock_now()); }
+        ReleaseSRWLockExclusive(&lock);
       }
     }
   } catch(...) { result=ERROR_NOT_ENOUGH_MEMORY; }
@@ -128,7 +133,30 @@ DWORD MacOutputStart(const std::wstring& directory,const std::wstring& status_di
   SetLastError(incoming);return result;
 }
 void MacOutputPoll() noexcept {
-  const DWORD incoming=GetLastError();AcquireSRWLockExclusive(&lock);PollLocked();ReleaseSRWLockExclusive(&lock);SetLastError(incoming);
+  const DWORD incoming=GetLastError();AcquireSRWLockExclusive(&lock);PollLocked();
+  // A helper that answered and then went quiet has exited (it gives up after
+  // two seconds without a reply) or hung. Relaunch it under a fresh token:
+  // a late packet from the old helper fails the token check and gets no reply,
+  // so that helper still exits by itself and never shares the controller.
+  bool relaunching=false;macbridge::Token key{};unsigned port=0;
+  std::wstring directory,status_directory;
+  const auto now=clock_now();
+  if(!closing&&channel!=INVALID_SOCKET&&relaunch.Due(now)) {
+    relaunch.Attempted(now);++stats.relaunches;
+    try {
+      directory=launch_directory;status_directory=launch_status_directory;
+      if(BCryptGenRandom(nullptr,token.data(),static_cast<ULONG>(token.size()),BCRYPT_USE_SYSTEM_PREFERRED_RNG)>=0) {
+        peer_known=false;last_sequence=0;key=token;port=stats.port;relaunching=true;
+      }
+    } catch(...) {}
+  }
+  ReleaseSRWLockExclusive(&lock);
+  if(relaunching) {
+    DWORD launch=ERROR_NOT_ENOUGH_MEMORY;
+    try { launch=Launch(directory,status_directory,key,port); } catch(...) {}
+    AcquireSRWLockExclusive(&lock);stats.launch_error=launch;ReleaseSRWLockExclusive(&lock);
+  }
+  SetLastError(incoming);
 }
 bool MacOutputSelect(bool allowed) noexcept {
   const DWORD incoming=GetLastError();AcquireSRWLockExclusive(&lock);
@@ -164,7 +192,7 @@ DWORD MacOutputStartControlled(std::uint64_t (*clock)() noexcept) noexcept {
   AcquireSRWLockExclusive(&lock);clock_now=clock;token.fill(0x5a);stats.error=StartChannel();const auto result=stats.error;ReleaseSRWLockExclusive(&lock);return result;
 }
 DWORD MacOutputLaunchControlled(const std::wstring& opener,const std::wstring& directory) noexcept {
-  try { return Launch(directory,directory,opener); } catch(...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  try { return Launch(directory,directory,token,stats.port,opener); } catch(...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
 #endif
 } // namespace edtrace

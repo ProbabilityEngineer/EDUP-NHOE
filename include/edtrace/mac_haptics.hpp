@@ -112,6 +112,29 @@ class Route {
   std::uint64_t seen_at_=0,released_at_=0,generation_=1,acquire_at_=0;
   std::uint32_t epoch_=0;
 };
+// The helper exits after two seconds without a reply (a stalled game worker,
+// a lost controller, a crash). Relaunch it only after it has answered at least
+// once since its last launch: a helper that never answers (blocked by
+// Gatekeeper, missing) is never retried. Attempts are spaced and capped, so a
+// helper that keeps dying cannot become a launch loop.
+constexpr std::uint64_t kHelperSilentMs = 2500, kRelaunchSpacingMs = 10000;
+constexpr unsigned kMaxRelaunches = 20;
+class Relaunch {
+ public:
+  void Launched(std::uint64_t now) noexcept { launched_=true;seen_=false;launched_at_=now; }
+  void Seen(std::uint64_t now) noexcept { if(launched_) { seen_=true;heard_at_=now; } }
+  bool Due(std::uint64_t now) const noexcept {
+    return launched_&&seen_&&attempts_<kMaxRelaunches&&now>=heard_at_&&now-heard_at_>=kHelperSilentMs&&
+           now>=launched_at_&&now-launched_at_>=kRelaunchSpacingMs;
+  }
+  // Counts the attempt even if the launch itself fails, so Due stays false.
+  void Attempted(std::uint64_t now) noexcept { ++attempts_;Launched(now); }
+  unsigned Attempts() const noexcept { return attempts_; }
+ private:
+  bool launched_=false,seen_=false;
+  std::uint64_t launched_at_=0,heard_at_=0;
+  unsigned attempts_=0;
+};
 class Receiver {
  public:
   void Begin(std::uint64_t sequence,std::uint64_t now) noexcept { sequence_=sequence;sent_at_=now;pending_=true; }

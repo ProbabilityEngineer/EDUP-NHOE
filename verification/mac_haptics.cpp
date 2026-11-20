@@ -50,5 +50,18 @@ int main() {
   receiver.Cancel();decoded.generation=6;
   Check(!receiver.Accept(decoded,poll.token,1202),"device replacement invalidates an outstanding reply");
   Check(!mb::Apply({},nullptr,nullptr),"missing actuator boundary fails quietly");
-  std::puts("PASS native Mac capability selection, independent channels, stop fence and stale/replayed packet guards");
+  mb::Relaunch relaunch;
+  Check(!relaunch.Due(100000),"no relaunch before the first launch");
+  relaunch.Launched(0);
+  Check(!relaunch.Due(100000),"a helper that never answered is never relaunched");
+  relaunch.Seen(20000);
+  Check(!relaunch.Due(22499)&&relaunch.Due(22500),"a helper silent for 2.5 s after answering is due");
+  relaunch.Seen(22600);Check(!relaunch.Due(23000),"a fresh poll cancels a pending relaunch");
+  relaunch.Attempted(30000);
+  Check(relaunch.Attempts()==1&&!relaunch.Due(100000),"a relaunched helper must answer before another attempt");
+  relaunch.Seen(30100);
+  Check(!relaunch.Due(39999)&&relaunch.Due(40000),"relaunches are spaced at least 10 s apart");
+  for(std::uint64_t now=40000;relaunch.Attempts()<mb::kMaxRelaunches;now+=20000) { relaunch.Attempted(now);relaunch.Seen(now+1); }
+  Check(!relaunch.Due(10000000),"relaunches stop at the cap");
+  std::puts("PASS native Mac capability selection, independent channels, stop fence, stale/replayed packet guards and bounded helper relaunch");
 }

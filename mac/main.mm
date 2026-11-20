@@ -52,24 +52,32 @@ static std::uint64_t Now() {
   if(!self.player||error) { self.errorCode=error.code;[self close];return self; }
   self.healthy=YES;return self;
 }
+// Core Haptics raises an Objective-C exception, rather than returning an
+// error, when a player's engine has already stopped (for example after the
+// controller disconnects). Uncaught, that aborts the companion, so every
+// player call treats an exception as an unhealthy motor.
+static constexpr NSInteger kEngineException=-3;
 -(BOOL)apply:(float)value {
   if(!self.healthy) return NO;
   value=edtrace::HapticUnit(value);NSError* error=nil;
-  if(value==0) {
-    if(self.intensity>0&&![self.player stopAtTime:CHHapticTimeImmediate error:&error]) { self.healthy=NO;self.errorCode=error.code;return NO; }
-  } else {
-    CHHapticDynamicParameter* parameter=[[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:value relativeTime:0];
-    if(![self.player sendParameters:@[parameter] atTime:CHHapticTimeImmediate error:&error]||
-       ![self.player startAtTime:CHHapticTimeImmediate error:&error]) { self.healthy=NO;self.errorCode=error.code;return NO; }
-    // Restarting an already-playing player restarts its finite pattern. A
-    // helper crash cannot leave an infinite controller request behind.
-  }
+  @try {
+    if(value==0) {
+      if(self.intensity>0&&![self.player stopAtTime:CHHapticTimeImmediate error:&error]) { self.healthy=NO;self.errorCode=error.code;return NO; }
+    } else {
+      CHHapticDynamicParameter* parameter=[[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:value relativeTime:0];
+      if(![self.player sendParameters:@[parameter] atTime:CHHapticTimeImmediate error:&error]||
+         ![self.player startAtTime:CHHapticTimeImmediate error:&error]) { self.healthy=NO;self.errorCode=error.code;return NO; }
+      // Restarting an already-playing player restarts its finite pattern. A
+      // helper crash cannot leave an infinite controller request behind.
+    }
+  } @catch(NSException*) { self.healthy=NO;self.errorCode=kEngineException;return NO; }
   self.intensity=value;return YES;
 }
 -(void)close {
   self.engine.stoppedHandler=^(CHHapticEngineStoppedReason reason) { (void)reason; };self.engine.resetHandler=^{};
-  [self.player stopAtTime:CHHapticTimeImmediate error:nil];
-  [self.engine stopWithCompletionHandler:nil];self.player=nil;self.engine=nil;self.healthy=NO;
+  @try { [self.player stopAtTime:CHHapticTimeImmediate error:nil]; } @catch(NSException*) {}
+  @try { [self.engine stopWithCompletionHandler:nil]; } @catch(NSException*) {}
+  self.player=nil;self.engine=nil;self.healthy=NO;
 }
 @end
 

@@ -237,6 +237,7 @@ void SaveStatus() noexcept {
       ",\"macos_helper_polls\":" + std::to_string(MacOutputGetStats().polls) +
       ",\"macos_frames\":" + std::to_string(MacOutputGetStats().frames) +
       ",\"macos_trigger_frames\":" + std::to_string(MacOutputGetStats().trigger_frames) +
+      ",\"macos_relaunches\":" + std::to_string(MacOutputGetStats().relaunches) +
       ",\"macos_client_error\":" + std::to_string(MacOutputGetStats().client_error) +
       ",\"macos_native_active\":" + std::to_string(MacOutputGetStats().active) +
       ",\"macos_blocks_fallback\":" + std::to_string(MacOutputGetStats().blocks_fallback) +
