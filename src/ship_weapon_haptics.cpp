@@ -63,8 +63,8 @@ struct Shape {
   HapticFrame onset, sustain;
 };
 // Low motor conveys weight; high motor supplies the sharper firing texture.
-// Experimental: each shot also kicks both trigger motors (which trigger fires
-// a given weapon is unknown from audio events). Trigger channels reach only
+// Each shot also kicks both trigger motors (which trigger fires a given
+// weapon is unknown from audio events). Trigger channels reach only
 // four-motor outputs (macOS companion, GameInput with trigger motors); the
 // two-motor paths ignore them, so those backends feel exactly as before.
 // [ShipCombat] TriggerStrength in ed-onfoot-haptics.ini scales or disables it.

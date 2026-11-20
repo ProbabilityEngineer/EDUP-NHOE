@@ -47,7 +47,7 @@ def main():
             print("PASS", name, flush=True)
 
         for name in ("natural_gain", "motor_ownership_policy", "vr_haptics", "mac_haptics", "mac_controller_check",
-                     "native_motion_metadata", "onfoot_haptics", "ship_weapon_motion", "ship_motion_playback", "sco_haptics", "openxr_output"):
+                     "native_motion_metadata", "onfoot_haptics", "ship_weapon_haptics", "ship_weapon_motion", "ship_motion_playback", "sco_haptics", "openxr_output"):
             run(name, build / (name + "_verification.exe"))
         run("session_retention", build / "session_retention_verification.exe", [windows(owned / "session-retention")])
         run("ship_motion_ordering", build / "ship_motion_ordering_verification.exe")
