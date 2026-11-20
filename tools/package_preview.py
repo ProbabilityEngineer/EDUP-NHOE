@@ -74,8 +74,9 @@ def collect(platform, windows, linux, gamepad, native_mac):
     files["Copy-to-game/ed-onfoot-haptics.ini"] = (
         b"[OnFoot]\r\nEnabled=1\r\nStrength=60\r\n\r\n"
         b"[SCO]\r\nEnabled=1\r\nStrength=60\r\n\r\n"
-        b"[ShipCombat]\r\nEnabled=1\r\nStrength=60\r\n\r\n"
-        b"[Controller]\r\nOutput=auto\r\n"
+        b"[ShipCombat]\r\nEnabled=1\r\nStrength=60\r\nTriggerStrength=100\r\n\r\n"
+        b"[Controller]\r\nOutput=auto\r\n\r\n"
+        b"[Diagnostics]\r\nRumbleLog=0\r\n"
     )
     helper = "Copy-to-game/ed-vr-haptics/"
     if not mac:
