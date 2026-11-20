@@ -14,8 +14,9 @@ shots fired past "stop" still count). Background is everything posted during
 the quiet baseline and the "get ready" periods. For each weapon this lists the
 Wwise event IDs absent from the background, checks every ID against the ship
 weapon routes in include/edtrace/ship_weapon_routes.hpp (family, size, cue
-role, LOD), and reports which existing mappings matched and whether the sound
-actually played (returned_playing_id != 0).
+role, LOD, and the motion links for firing variants), and reports which
+existing mappings matched and whether the sound actually played
+(returned_playing_id != 0).
 
 Usage:
   tools/weapon_capture_report.py <dir with timeline.tsv> <onfoot-events-*.jsonl> [--json out.json]
@@ -41,6 +42,12 @@ def load_routes():
             for role, value in zip(("start", "stop", "shot"), ids[lod * 3:lod * 3 + 3]):
                 if int(value):
                     known[int(value)] = f"{family}/{size} {role} LOD{lod}"
+    # Firing variants that play audio alone, linked to an authored Motion cue.
+    links = text[text.find("kShipMotionLinks"):]
+    links = links[:links.find("};")]
+    for firing, native, motion, label in re.findall(r"\{(\d+)u?,\s*(\d+)u?,\s*(\d+)u?\},\s*//\s*([^\n]+)", links):
+        for value, role in ((firing, "firing"), (native, "native firing"), (motion, "motion")):
+            known[int(value)] = f"{label.strip()} {role} (motion link)"
     return known
 
 
