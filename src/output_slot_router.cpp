@@ -1,4 +1,5 @@
 #include "edtrace/output_slot_router.hpp"
+#include "edtrace/page_protection.hpp"
 #include <atomic>
 #include <cstring>
 #include <limits>
@@ -25,7 +26,7 @@ DWORD Exchange(std::uintptr_t slot, MotorBackend expected, MotorBackend value) n
   if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), PAGE_READWRITE, &old)) return GetLastError();
   const auto observed = InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), Bits(value), Bits(expected));
   DWORD ignored = 0;
-  if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), old, &ignored)) {
+  if (!VirtualProtect(reinterpret_cast<void*>(slot), sizeof(void*), RestorableProtection(old), &ignored)) {
     const DWORD error = GetLastError();
     if (observed == Bits(expected))
       InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), Bits(expected), Bits(value));

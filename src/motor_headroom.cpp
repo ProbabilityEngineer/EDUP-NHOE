@@ -1,5 +1,6 @@
 #include "edtrace/motor_headroom.hpp"
 #include "edtrace/motor_sender_profile.hpp"
+#include "edtrace/page_protection.hpp"
 #ifdef ED_CROSSOVER_COMPAT
 #include "edtrace/authored_trigger_profile.hpp"
 #endif
@@ -133,15 +134,16 @@ DWORD InstallFrameSlot(std::uintptr_t address, std::uintptr_t frame, std::uintpt
     const auto failure = GetLastError();
     return Fail(failure ? failure : ERROR_ACCESS_DENIED);
   }
+  const DWORD restore_protect = RestorableProtection(old_protect);
   original.store(reinterpret_cast<Sender>(sender),std::memory_order_release);
   native_frame.store(reinterpret_cast<Frame>(frame),std::memory_order_release);
   active.store(true,std::memory_order_release);
   const bool changed = InterlockedCompareExchangePointer(slot,replacement,expected) == expected;
   DWORD ignored = 0;
-  if (!VirtualProtect(reinterpret_cast<void*>(address), sizeof(void*), old_protect, &ignored)) {
+  if (!VirtualProtect(reinterpret_cast<void*>(address), sizeof(void*), restore_protect, &ignored)) {
     const auto failure = GetLastError();
     active.store(false,std::memory_order_release);
-    const DWORD rollback_error = QueueFrameSlotRollback(address,old_protect);
+    const DWORD rollback_error = QueueFrameSlotRollback(address,restore_protect);
     return Fail(rollback_error ? rollback_error : failure ? failure : ERROR_ACCESS_DENIED);
   }
   if (!changed) {
@@ -152,7 +154,7 @@ DWORD InstallFrameSlot(std::uintptr_t address, std::uintptr_t frame, std::uintpt
   const bool readable = Read(address,observed);
   if (!readable || observed != replacement) {
     active.store(false,std::memory_order_release);
-    if (!readable) QueueFrameSlotRollback(address,old_protect);
+    if (!readable) QueueFrameSlotRollback(address,restore_protect);
     return Fail(readable ? ERROR_ALREADY_EXISTS : ERROR_NOACCESS);
   }
   installed_frame_slot = address;

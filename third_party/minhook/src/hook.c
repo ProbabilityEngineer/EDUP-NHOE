@@ -427,6 +427,14 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
             memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL));
     }
 
+    // EDUP-NHOE: never restore a copy-on-write protection. The write just made
+    // the page private; putting PAGE_*WRITECOPY back can drop that copy and
+    // bring back the image's original bytes. Keep modifier bits.
+    switch (oldProtect & 0xFF)
+    {
+    case PAGE_WRITECOPY:         oldProtect = PAGE_READONLY     | (oldProtect & ~0xFFu); break;
+    case PAGE_EXECUTE_WRITECOPY: oldProtect = PAGE_EXECUTE_READ | (oldProtect & ~0xFFu); break;
+    }
     VirtualProtect(pPatchTarget, patchSize, oldProtect, &oldProtect);
 
     // Just-in-case measure.
