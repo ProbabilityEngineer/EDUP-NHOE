@@ -6,7 +6,10 @@
 # mod has claimed it (recording started), then speaks a cue for each weapon:
 # "<weapon>, get ready" (switch fire group), "fire", "stop". Every cue is
 # logged with a timestamp so recorded audio events can be matched to weapons.
-# At the end the marker is removed, which makes the mod close the recording.
+# At the end the marker is removed, which makes the mod close the recording,
+# and the session's files are copied into the capture folder
+# (~/Library/Logs/edup-nhoe-capture/<time>/session/), because the mod keeps
+# only the newest few session folders and deletes older ones.
 #
 # Usage: tools/weapon_capture.sh [--bottle NAME] [--fire SEC] [--ready SEC]
 #                                [weapon ...]
@@ -53,11 +56,19 @@ now_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
 mark() { printf '%s\t%s\t%s\n' "$(now_ms)" "$(date '+%H:%M:%S')" "$1" | tee -a "$TIMELINE"; }
 speak() { say -r 210 "$1" & }
 
+SESSION=""
 cleanup() {
   rm -f "$MARKER"
   mark "marker removed"
 }
-trap 'cleanup; echo "Interrupted. Timeline: $TIMELINE"; exit 130' INT TERM
+# Give the mod time to close the recording, then keep a copy of the session.
+copy_session() {
+  [ -n "$SESSION" ] && [ -d "$SESSIONS/$SESSION" ] || return 0
+  sleep 3
+  mkdir -p "$OUT/session"
+  cp -p "$SESSIONS/$SESSION"/* "$OUT/session/" && echo "Session copied to $OUT/session"
+}
+trap 'cleanup; copy_session; echo "Interrupted. Capture folder: $OUT"; exit 130' INT TERM
 
 printf 'epoch_ms\ttime\tevent\n' > "$TIMELINE"
 printf 'ed-onfoot-event-trace-v1\n' > "$MARKER"
@@ -88,8 +99,8 @@ done
 
 speak "Done. Thank you."
 cleanup
-sleep 3
+copy_session
 echo
-echo "Timeline: $TIMELINE"
-echo "Session:  $SESSIONS/$SESSION"
-ls -la "$SESSIONS/$SESSION" 2>/dev/null
+echo "Capture folder: $OUT"
+ls -la "$OUT" "$OUT/session" 2>/dev/null
+echo "Report: tools/weapon_capture_report.py \"$OUT\""

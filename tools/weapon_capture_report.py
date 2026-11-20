@@ -19,7 +19,9 @@ existing mappings matched and whether the sound actually played
 (returned_playing_id != 0).
 
 Usage:
-  tools/weapon_capture_report.py <dir with timeline.tsv> <onfoot-events-*.jsonl> [--json out.json]
+  tools/weapon_capture_report.py <dir with timeline.tsv> [onfoot-events-*.jsonl] [--json out.json]
+The events file defaults to the one in <dir>/session/ (copied there by the
+Mac capture script).
 Output is Markdown on stdout.
 """
 import argparse
@@ -94,9 +96,14 @@ def load_posts(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("capture_dir", type=pathlib.Path)
-    parser.add_argument("events", type=pathlib.Path)
+    parser.add_argument("events", type=pathlib.Path, nargs="?")
     parser.add_argument("--json", type=pathlib.Path)
     args = parser.parse_args()
+    if args.events is None:
+        found = sorted((args.capture_dir / "session").glob("onfoot-events-*.jsonl"))
+        if len(found) != 1:
+            parser.error("pass the onfoot-events file: expected exactly one in <dir>/session/")
+        args.events = found[0]
 
     known = load_routes()
     windows, quiet, start, end = load_timeline(args.capture_dir / "timeline.tsv")
