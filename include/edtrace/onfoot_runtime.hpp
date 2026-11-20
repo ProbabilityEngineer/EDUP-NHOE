@@ -23,5 +23,9 @@ void QueueOnFootInput(const OnFootInput& input) noexcept;
 void TickOnFootFeedback(bool ready, std::uint64_t milliseconds, HapticFrame travel = {},
                         bool ship_ready = false) noexcept;
 void StopOnFootFeedback() noexcept;
+// Peaks of each mod effect source since the previous call. Call from the
+// worker thread that calls TickOnFootFeedback.
+struct ModRumblePeaks { HapticFrame onfoot, ship, sco; };
+ModRumblePeaks TakeModRumblePeaks() noexcept;
 OnFootRuntimeStats GetOnFootRuntimeStats() noexcept;
 }  // namespace edtrace

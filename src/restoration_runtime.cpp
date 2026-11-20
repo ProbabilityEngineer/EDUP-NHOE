@@ -51,6 +51,78 @@ const char* controller_output_mode = "auto";
 const char* startup_stage = "profile";
 bool gameinput_attempted = false;
 std::atomic<DWORD> trigger_hook_error{ERROR_NOT_READY}, trigger_trace_error{ERROR_NOT_READY};
+std::atomic<bool> rumble_log_enabled{false};
+std::atomic<std::uint64_t> rumble_log_lines{0};
+std::atomic<DWORD> rumble_log_error{ERROR_SUCCESS};
+
+template <typename T, std::size_t N> std::string JsonArray(const std::array<T, N>& values) {
+  std::string text = "[";
+  for (std::size_t i = 0; i < N; ++i) text += (i ? "," : "") + std::to_string(values[i]);
+  return text + "]";
+}
+// [Diagnostics] RumbleLog=1: every 100 ms with any rumble, one JSON line with
+// the peak of the game's own Motion channels and of each mod effect source
+// (on-foot, ship weapons, SCO), in thousandths, ordered left handle, right
+// handle, left trigger, right trigger. Silent intervals are skipped (one zero
+// line closes each burst). Off by default; capped at 8 MB per session.
+class RumbleLog {
+ public:
+  ~RumbleLog() { if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_); }
+  void Configure(bool enabled, const std::wstring& directory) noexcept {
+    if (enabled && file_ == INVALID_HANDLE_VALUE && !failed_) Open(directory);
+    enabled = enabled && file_ != INVALID_HANDLE_VALUE && !capped_;
+    if (enabled != enabled_) {
+      enabled_ = enabled;
+      AuthoredTriggersSetDiagnostics(enabled);
+      if (enabled) { AuthoredTriggersTakeIntervalPeaks(); TakeModRumblePeaks(); }
+    }
+    rumble_log_enabled.store(enabled_);
+  }
+  void Sample() noexcept {
+    const auto game = AuthoredTriggersTakeIntervalPeaks();
+    const auto mod = TakeModRumblePeaks();
+    if (!enabled_) return;
+    const bool active = game[0] || game[1] || game[2] || game[3] ||
+                        HapticNonzero(mod.onfoot) || HapticNonzero(mod.ship) || HapticNonzero(mod.sco);
+    if (!active && !previous_) return;
+    previous_ = active;
+    FILETIME now{}; GetSystemTimeAsFileTime(&now);
+    const auto ticks = (static_cast<std::uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+    std::string line = "{\"t\":" + std::to_string(ticks / 10000 - 11644473600000ULL) +
+        ",\"game\":" + JsonArray(game) + ",\"onfoot\":" + Milli(mod.onfoot) +
+        ",\"ship\":" + Milli(mod.ship) + ",\"sco\":" + Milli(mod.sco) + "}\n";
+    if (written_ + line.size() > kCap) {
+      Write("{\"type\":\"cap_reached\"}\n");
+      capped_ = true; enabled_ = false; AuthoredTriggersSetDiagnostics(false); rumble_log_enabled.store(false);
+      return;
+    }
+    if (Write(line)) rumble_log_lines.fetch_add(1, std::memory_order_relaxed);
+  }
+
+ private:
+  static constexpr std::size_t kCap = 8u * 1024 * 1024;
+  static std::string Milli(HapticFrame frame) {
+    const auto milli = [](float value) { return static_cast<std::uint32_t>(HapticUnit(value) * 1000.0f); };
+    return JsonArray(std::array<std::uint32_t, 4>{{milli(frame.low), milli(frame.high), milli(frame.left), milli(frame.right)}});
+  }
+  void Open(const std::wstring& directory) noexcept {
+    const auto path = directory + L"\\rumble-sources-" + std::to_wstring(GetCurrentProcessId()) + L".jsonl";
+    file_ = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file_ == INVALID_HANDLE_VALUE) { failed_ = true; rumble_log_error.store(GetLastError()); return; }
+    Write("{\"type\":\"rumble_sources\",\"schema\":1,\"build\":\"" EDUP_BUILD_DESCRIBE "\",\"interval_ms\":100,"
+          "\"units\":\"thousandths\",\"channels\":[\"left_handle\",\"right_handle\",\"left_trigger\",\"right_trigger\"]}\n");
+  }
+  bool Write(const std::string& text) noexcept {
+    DWORD done = 0;
+    if (!WriteFile(file_, text.data(), static_cast<DWORD>(text.size()), &done, nullptr) || done != text.size()) {
+      rumble_log_error.store(GetLastError()); return false;
+    }
+    written_ += done; return true;
+  }
+  HANDLE file_ = INVALID_HANDLE_VALUE;
+  std::size_t written_ = 0;
+  bool enabled_ = false, previous_ = false, failed_ = false, capped_ = false;
+};
 std::atomic<DWORD> onfoot_trace_error{0};
 #ifdef ED_CROSSOVER_COMPAT
 std::atomic<DWORD> output_restore_error{ERROR_SUCCESS};
@@ -120,11 +192,6 @@ bool Profile(std::uintptr_t image, std::size_t& size) noexcept {
         count != site.size || std::memcmp(actual.data(), site.bytes.data(), site.size)) return false;
   }
   return true;
-}
-template <typename T, std::size_t N> std::string JsonArray(const std::array<T, N>& values) {
-  std::string text = "[";
-  for (std::size_t i = 0; i < N; ++i) text += (i ? "," : "") + std::to_string(values[i]);
-  return text + "]";
 }
 float FeedbackStrength(const std::wstring& path, const wchar_t* section,
                        const wchar_t* key = L"Strength", long fallback = 60, long maximum = 100) noexcept {
@@ -201,6 +268,9 @@ void SaveStatus() noexcept {
       ",\"gameinput_supported_motors\":" + std::to_string(s.gameinput_supported_motors) + ",\"gameinput_trigger_submissions\":" + std::to_string(s.gameinput_trigger_submissions) +
       ",\"trigger_trace_error\":" + std::to_string(s.trigger_trace_error) +
       ",\"trigger_trace_time_limit_reached\":" + std::to_string(s.trigger_trace_time_limit_reached) +
+      ",\"rumble_log\":" + std::to_string(rumble_log_enabled.load()) +
+      ",\"rumble_log_lines\":" + std::to_string(rumble_log_lines.load()) +
+      ",\"rumble_log_error\":" + std::to_string(rumble_log_error.load()) +
       ",\"gameinput_compat_error\":" + std::to_string(s.gameinput_compat_error) + ",\"gameinput_compat_ready\":" + std::to_string(s.gameinput_compat_ready) +
       ",\"gameinput_compat_waiting_zero\":" + std::to_string(s.gameinput_compat_waiting_zero) + ",\"gameinput_compat_pending_stop\":" + std::to_string(s.gameinput_compat_pending_stop) +
       ",\"gameinput_hid_error\":" + std::to_string(s.gameinput_hid_error) + ",\"gameinput_hid_write_error\":" + std::to_string(s.gameinput_hid_write_error) +
@@ -378,7 +448,9 @@ DWORD WINAPI Run(void*) noexcept {
     if (result) throw result;
     start_error.store(ERROR_SUCCESS, std::memory_order_release);
     startup_stage = "running";
-    bool previous_ready = false; unsigned ticks = 0, control_ticks = 0;
+    bool previous_ready = false; unsigned ticks = 0, control_ticks = 0, log_ticks = 0;
+    RumbleLog rumble_log;
+    rumble_log.Configure(GetPrivateProfileIntW(L"Diagnostics",L"RumbleLog",0,onfoot_config.c_str()) == 1, log_directory);
     while (WaitForSingleObject(stop_event, 20) != WAIT_OBJECT_0) {
       XINPUT_CAPABILITIES capability{};
       const auto gain = NaturalRestorationGetStatus();
@@ -413,8 +485,10 @@ DWORD WINAPI Run(void*) noexcept {
       const bool feedback_ready = gain.enabled && output_connected && haptic_focused && output_bound;
       const auto now = GetTickCount64();
       TickOnFootFeedback(feedback_allowed && feedback_ready, now, sco.Tick(feedback_ready, now), ship_allowed && feedback_ready);
+      if (++log_ticks >= 5) { log_ticks = 0; rumble_log.Sample(); }
       if (++control_ticks >= 25) {
         control_ticks = 0;
+        rumble_log.Configure(GetPrivateProfileIntW(L"Diagnostics",L"RumbleLog",0,onfoot_config.c_str()) == 1, log_directory);
         if (feedback_requested) {
           feedback_allowed = GetPrivateProfileIntW(L"OnFoot",L"Enabled",0,onfoot_config.c_str()) == 1;
           SetOnFootFeedbackStrength(FeedbackStrength(onfoot_config,L"OnFoot"));

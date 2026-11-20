@@ -36,6 +36,10 @@ std::atomic<std::uint32_t> peak_left{0}, peak_right{0};
 std::array<std::atomic<std::uint32_t>, 4> sink_peak{}, buffer_peak{};
 std::array<std::atomic<std::uint64_t>, 4> sink_nonzero{}, buffer_nonzero{};
 std::atomic<std::uint32_t> consume_config{0};
+// Off by default ([Diagnostics] RumbleLog): gates the per-channel reads above
+// and the interval peaks the rumble source log takes every 100 ms.
+std::atomic<bool> diagnostics{false};
+std::array<std::atomic<std::uint32_t>, 4> interval_peak{};
 void Peak(std::atomic<std::uint32_t>& peak, float value) noexcept {
   const auto milli = static_cast<std::uint32_t>(value * 1000.0f);
   auto seen = peak.load(std::memory_order_relaxed);
@@ -62,6 +66,19 @@ bool Read(std::uintptr_t address, void* destination, std::size_t size) noexcept 
   SIZE_T count = 0;
   return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), destination,
                            size, &count) && count == size;
+}
+void ObserveSink(std::uintptr_t values, std::size_t channels) noexcept {
+  std::array<float, 4> all{};
+  if (!diagnostics.load(std::memory_order_relaxed) || channels > all.size() ||
+      !Read(values, all.data(), channels * sizeof(float))) return;
+  for (std::size_t c = 0; c < channels; ++c) {
+    if (!std::isfinite(all[c])) continue;
+    float magnitude = std::fabs(all[c]);
+    if (magnitude > 1) magnitude = 1;
+    if (magnitude > 0) sink_nonzero[c].fetch_add(1, std::memory_order_relaxed);
+    Peak(sink_peak[c], magnitude);
+    Peak(interval_peak[c], magnitude);
+  }
 }
 bool SinkHeader(void* self, Sink& sink) noexcept {
   return Read(reinterpret_cast<std::uintptr_t>(self), &sink, sizeof(sink)) &&
@@ -140,19 +157,14 @@ void WINAPI Update(void* self) noexcept {
     frame_calls.fetch_add(1, std::memory_order_relaxed);
     Sink sink{};
     if (SinkHeader(self, sink)) {
-      if (sink.channels == 2) two_channel_frames.fetch_add(1, std::memory_order_relaxed);
+      if (sink.channels == 2) {
+        two_channel_frames.fetch_add(1, std::memory_order_relaxed);
+        if (sink.values) ObserveSink(sink.values, 2);
+      }
       if (ready.load(std::memory_order_acquire) && sink.channels == 4 && sink.values &&
           Known(reinterpret_cast<std::uintptr_t>(self)) &&
           sink.values <= std::numeric_limits<std::uintptr_t>::max() - 16) {
-        std::array<float, 4> all{};
-        if (Read(sink.values, all.data(), sizeof(all))) {
-          for (std::size_t c = 0; c < all.size(); ++c) {
-            if (!std::isfinite(all[c])) continue;
-            const float magnitude = std::fabs(all[c]);
-            if (magnitude > 0) sink_nonzero[c].fetch_add(1, std::memory_order_relaxed);
-            Peak(sink_peak[c], magnitude > 1 ? 1 : magnitude);
-          }
-        }
+        ObserveSink(sink.values, 4);
         std::array<float, 2> values{};
         if (Read(sink.values + 8, values.data(), sizeof(values))) {
           if (std::isfinite(values[0]) && std::isfinite(values[1])) {
@@ -205,7 +217,7 @@ void WINAPI ObserveConsume(void* self, void* buffer, std::uint64_t gain) noexcep
       if ((config & 255) == 4) {
         consume_four.fetch_add(1, std::memory_order_relaxed);
         consume_config.store(config, std::memory_order_relaxed);
-        ObserveBuffer(address);
+        if (diagnostics.load(std::memory_order_relaxed)) ObserveBuffer(address);
       }
     }
   }
@@ -330,6 +342,14 @@ DWORD AuthoredTriggersStartControlledFixture(const AuthoredTriggerFixtureTargets
 }
 void AuthoredTriggersSetReady(bool value) noexcept {
   ready.store(value && accepting.load(std::memory_order_acquire), std::memory_order_release);
+}
+void AuthoredTriggersSetDiagnostics(bool enabled) noexcept {
+  diagnostics.store(enabled, std::memory_order_relaxed);
+}
+std::array<std::uint32_t, 4> AuthoredTriggersTakeIntervalPeaks() noexcept {
+  std::array<std::uint32_t, 4> result{};
+  for (std::size_t c = 0; c < result.size(); ++c) result[c] = interval_peak[c].exchange(0, std::memory_order_relaxed);
+  return result;
 }
 void AuthoredTriggersStop() noexcept {
   ready.store(false, std::memory_order_release);

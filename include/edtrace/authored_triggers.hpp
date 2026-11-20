@@ -34,6 +34,11 @@ struct AuthoredTriggerStats {
 // It changes only freshly initialized native Motion output formats, never an
 // already allocated two-channel accumulator, and invokes no output transport.
 DWORD AuthoredTriggersStart(std::uintptr_t image, std::size_t size, bool verified) noexcept;
+// Per-channel diagnostics (status channel peaks, rumble source log). Off by
+// default; when off, those status fields stay zero and no extra reads happen.
+void AuthoredTriggersSetDiagnostics(bool enabled) noexcept;
+// Peak of each game Motion channel (thousandths) since the previous call.
+std::array<std::uint32_t, 4> AuthoredTriggersTakeIntervalPeaks() noexcept;
 void AuthoredTriggersSetReady(bool ready) noexcept;
 // Permanently disables format mutation/capture; installed hooks only forward.
 void AuthoredTriggersStop() noexcept;
