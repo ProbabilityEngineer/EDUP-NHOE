@@ -1,6 +1,7 @@
 #include "edtrace/restoration_runtime.hpp"
 #include "edtrace/control.hpp"
 #include "edtrace/capture_request.hpp"
+#include "edtrace/session_retention.hpp"
 #include "edtrace/profile.hpp"
 #include "edtrace/xinput_output.hpp"
 #include "edtrace/sco_feedback.hpp"
@@ -43,6 +44,7 @@ extern "C" edtrace::MotorBackend __imp_XInputSetState;
 namespace edtrace { namespace {
 INIT_ONCE once = INIT_ONCE_STATIC_INIT;
 HANDLE stop_event = nullptr, done_event = nullptr, error_event = nullptr;
+std::atomic<DWORD> shutdown_error{0};
 std::atomic<DWORD> start_error{ERROR_NOT_READY};
 std::atomic<bool> profile_match{false}, stopped{false};
 std::wstring log_directory;
@@ -216,7 +218,8 @@ void SaveStatus() noexcept {
       )
 #endif
       + "\",\"profile_match\":" + std::to_string(s.profile_match) +
-      ",\"start_error\":" + std::to_string(s.start_error) + ",\"output_hook\":" + std::to_string(s.output_hook) +
+      ",\"start_error\":" + std::to_string(s.start_error) + ",\"shutdown_error\":" + std::to_string(shutdown_error.load()) +
+      ",\"output_hook\":" + std::to_string(s.output_hook) +
       ",\"startup_stage\":\"" + startup_stage + "\"" +
       ",\"output_hook_error\":" + std::to_string(XInputOutputGetStats().error) +
       ",\"headroom_error\":" + std::to_string(MotorHeadroomGetStats().installation_error) +
@@ -295,7 +298,9 @@ void SaveStatus() noexcept {
       ",\"onfoot_duplicates\":" + std::to_string(s.onfoot_duplicates) + ",\"onfoot_expired_holds\":" + std::to_string(s.onfoot_expired_holds) +
       ",\"onfoot_actor_overflows\":" + std::to_string(s.onfoot_actor_overflows) + ",\"onfoot_output_frames\":" + std::to_string(s.onfoot_output_frames)
       + ",\"ship_combat_configured\":" + std::to_string(supplemental.ship_configured) +
-      ",\"ship_combat_active\":" + std::to_string(supplemental.ship_active)
+      ",\"ship_combat_active\":" + std::to_string(supplemental.ship_active) +
+      ",\"ship_motion_posts\":" + std::to_string(supplemental.ship_motion_posts) +
+      ",\"ship_motion_rejected\":" + std::to_string(supplemental.ship_motion_rejected)
 #ifdef ED_VR_HAPTICS_MIRROR
       + ",\"vr_listening\":" + std::to_string(VrOutputGetStats().listening)
       + ",\"vr_error\":" + std::to_string(VrOutputGetStats().error)
@@ -329,8 +334,10 @@ DWORD WINAPI Run(void*) noexcept {
     if (!CreateDirectoryW(parent.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) throw GetLastError();
     FILETIME time{}; GetSystemTimeAsFileTime(&time);
     const auto stamp = (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
-    log_directory = parent + L"\\" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(stamp);
+    const auto session = std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(stamp);
+    log_directory = parent + L"\\" + session;
     if (!CreateDirectoryW(log_directory.c_str(), nullptr)) throw GetLastError();
+    PruneDiagnosticSessions(parent, session);
     const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
     std::size_t size = 0;
     if (Hash(Path(nullptr)) != kGameSha256 || !Profile(image, size)) throw DWORD(ERROR_REVISION_MISMATCH);
@@ -409,7 +416,8 @@ DWORD WINAPI Run(void*) noexcept {
       trigger_trace_error.store(StartAuthoredTriggerTrace(image, size, true, log_directory.c_str()));
     if (supplemental_requested)
       StartOnFootFeedback(FeedbackStrength(onfoot_config,L"OnFoot"),ship_requested,
-                          FeedbackStrength(onfoot_config,L"ShipCombat"),feedback_requested);
+                          FeedbackStrength(onfoot_config,L"ShipCombat"),feedback_requested,
+                          &PostAuthoredShipMotion,&CancelAuthoredShipMotion);
     SetShipWeaponTriggerStrength(FeedbackStrength(onfoot_config,L"ShipCombat",L"TriggerStrength",100,300));
     const auto consumer = supplemental_requested ? &QueueOnFootInput : nullptr;
     const auto ship_begin = ship_requested ? &BeginShipWeaponInput : nullptr;
@@ -485,6 +493,7 @@ DWORD WINAPI Run(void*) noexcept {
       const bool feedback_ready = gain.enabled && output_connected && haptic_focused && output_bound;
       const auto now = GetTickCount64();
       TickOnFootFeedback(feedback_allowed && feedback_ready, now, sco.Tick(feedback_ready, now), ship_allowed && feedback_ready);
+      ServiceAuthoredShipMotion();
       if (++log_ticks >= 5) { log_ticks = 0; rumble_log.Sample(); }
       if (++control_ticks >= 25) {
         control_ticks = 0;
@@ -528,39 +537,70 @@ DWORD WINAPI Run(void*) noexcept {
   if (result) start_error.store(result, std::memory_order_release);
   // Never remove a live trampoline. Inactive hooks forward until process exit.
   ClearOnFootEventConsumer();
+  XInputOutputBeginShutdown();
   XInputOutputSetReady(false, false, false);
+  GameInputOutputStop();
 #ifdef ED_CROSSOVER_COMPAT
   MacOutputStop();
 #endif
-  StopOnFootFeedback();
-  AuthoredTriggersStop();
-  GameInputOutputStop();
 #ifdef ED_VR_HAPTICS_MIRROR
   VrOutputStop();
   MetaOutputStop();
   VrAutoLaunchStop();
 #endif
+  // Keep the verified stop adapter resident until cancellation is accepted.
+  // RestorationStop bounds the caller's wait while this worker retries.
+  const auto stop_started = GetTickCount64();
+  // Gain restoration must progress even if a native cue refuses cancellation.
+  // In particular, CrossOver may rebuild its audio binding during this wait.
+  DWORD restoration = ERROR_SUCCESS;
+  for (;;) {
+    const bool feedback_stopped = StopOnFootFeedback();
+    const DWORD output_stop = XInputOutputServiceShutdown();
+    const bool gain_stopped = NaturalProbePollStop(restoration);
+    const bool gain_pending = !gain_stopped || NaturalRestorationGetStatus().owns_change;
+#ifdef ED_CROSSOVER_COMPAT
+    // Wwise can rebuild this verified binding while restoration is pending,
+    // including when the gain worker has reported an unconfirmed restore.
+    if (gain_pending) XInputOutputRefresh();
+#endif
+    if (restoration) {
+      DWORD expected = ERROR_SUCCESS;
+      auto& destination = gain_stopped ? start_error : shutdown_error;
+      if (destination.compare_exchange_strong(expected,restoration,std::memory_order_acq_rel)) SaveStatus();
+      SetEvent(error_event);
+    }
+    if (feedback_stopped && !output_stop && !gain_pending) break;
+    if ((!feedback_stopped || output_stop) && !shutdown_error.load() && GetTickCount64() - stop_started >= 2000) {
+      shutdown_error.store(output_stop ? output_stop : ERROR_TIMEOUT,std::memory_order_release);
+      SaveStatus();
+      SetEvent(error_event);
+    }
+    Sleep(20);
+  }
+  AuthoredTriggersStop();
   if (!StopOnFootEventTrace()) onfoot_trace_error.store(ERROR_TIMEOUT);
   if (!StopAuthoredTriggerTrace()) trigger_trace_error.store(ERROR_TIMEOUT);
   if (capture_claim) RetireCaptureRequest(onfoot_marker.c_str(), capture_claim);
-  const DWORD restoration = NaturalProbeStop(10000);
 #ifdef ED_CROSSOVER_COMPAT
   // This only retries a failed frame-slot installation before gain started.
   MotorHeadroomRetryFrameSlotRollback();
 #endif
-  if (restoration) start_error.store(restoration, std::memory_order_release);
 #ifdef ED_CROSSOVER_COMPAT
-  else {
+  if (!NaturalRestorationGetStatus().owns_change) {
     DWORD output_restore = OutputSlotsStop();
     if (output_restore) {
       Sleep(20);
       output_restore = OutputSlotsStop();
     }
     output_restore_error.store(output_restore, std::memory_order_release);
+    if (!output_restore) XInputOutputEndShutdown();
   }
+#else
+  if (!NaturalRestorationGetStatus().owns_change) XInputOutputEndShutdown();
 #endif
   stopped.store(true, std::memory_order_release); SaveStatus();
-  bool failed = start_error.load() != ERROR_SUCCESS;
+  bool failed = start_error.load() != ERROR_SUCCESS || shutdown_error.load() != ERROR_SUCCESS;
 #ifdef ED_CROSSOVER_COMPAT
   failed = failed || output_restore_error.load() != ERROR_SUCCESS ||
            MotorHeadroomGetStats().frame_slot_rollback_error != ERROR_SUCCESS;
@@ -592,17 +632,20 @@ void RequestRestorationStart(HMODULE self) noexcept {
 DWORD RestorationStop(DWORD timeout_ms) noexcept {
   if (!stop_event || !done_event) return ERROR_NOT_READY;
   SetEvent(stop_event);
-  const DWORD wait = WaitForSingleObject(done_event, timeout_ms);
+  const HANDLE events[]{done_event,error_event};
+  const DWORD wait = WaitForMultipleObjects(2,events,FALSE,timeout_ms);
   if (wait == WAIT_TIMEOUT) return ERROR_TIMEOUT;
-  if (wait != WAIT_OBJECT_0) return GetLastError();
-  const DWORD error = start_error.load();
+  if (wait != WAIT_OBJECT_0 && wait != WAIT_OBJECT_0 + 1) return GetLastError();
+  const DWORD error = start_error.load() ? start_error.load() :
+    (wait == WAIT_OBJECT_0 + 1 ? shutdown_error.load() : ERROR_SUCCESS);
 #ifdef ED_CROSSOVER_COMPAT
   if (!error) {
     const DWORD rollback = MotorHeadroomGetStats().frame_slot_rollback_error;
-    return rollback ? rollback : output_restore_error.load();
+    const auto output = rollback ? rollback : output_restore_error.load();
+    return output ? output : (wait == WAIT_OBJECT_0 + 1 ? ERROR_GEN_FAILURE : ERROR_SUCCESS);
   }
 #endif
-  return error;
+  return error ? error : (wait == WAIT_OBJECT_0 + 1 ? ERROR_GEN_FAILURE : ERROR_SUCCESS);
 }
 RestorationStatus RestorationGetStatus() noexcept {
   const auto output = XInputOutputGetStats();

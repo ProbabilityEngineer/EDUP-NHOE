@@ -1,4 +1,4 @@
-EDUP - NHOE 0.12.1-PREVIEW.7 - MAC / CROSSOVER DRAG-AND-DROP
+EDUP - NHOE 0.12.1-PREVIEW.8 - MAC / CROSSOVER DRAG-AND-DROP
 
 The native four-motor companion requires macOS 11.3 or newer. Its universal
 binary supports Apple silicon and Intel. A tester felt rumble in an Intel
@@ -113,6 +113,11 @@ a sustained effect for beams, a pulse for each multicannon shot and
 shorter or heavier pulses for other weapon families. Physical calibration
 and the inferred variants still need gameplay verification.
 
+The small fixed railgun and medium fixed cannon corrections use their existing
+authored Motion at native gain. Any positive ShipCombat Strength enables
+these corrections. Strength=0 disables them. Positive strength values scale
+the added weapon patterns, while the linked authored cues retain native gain.
+
 New INI files enable ship feedback at 60%. If you kept an existing INI,
 add this section and restart Elite:
 
@@ -131,6 +136,8 @@ mask and engine readiness. During a normal game launch, check the newest
 session in the bottle's Windows temporary directory:
   %TEMP%\EDRumbleRestoration\<session>\restoration-status.json
   %TEMP%\EDRumbleRestoration\<session>\macos-haptics-status.json
+Each launch keeps the four newest inactive sessions alongside the current one
+and removes older mod logs. Save a copy of a session if you need it later.
 The host reports macos-corehaptics when native output is active, macos-handoff
 during a transition, or gameinput/xinput during fallback.
 macos_helper_polls > 0 confirms the companion connected to this game session.

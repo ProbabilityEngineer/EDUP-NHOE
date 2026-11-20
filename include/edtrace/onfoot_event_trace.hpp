@@ -39,6 +39,8 @@ DWORD StartOnFootEventSources(std::uintptr_t image, std::size_t image_size, bool
 // Clear before final Stop to disable all hooks. While a consumer remains,
 // StopOnFootEventTrace closes only the recorder and retains forwarding hooks.
 void ClearOnFootEventConsumer() noexcept;
+bool ShipMotionStopReady() noexcept;
+bool StopShipMotion(std::uint32_t event, std::uint64_t object, std::uint32_t playing) noexcept;
 // Re-arm recording on existing validated hooks after a clean recorder stop.
 DWORD StartOnFootEventRecording(const wchar_t* log_directory) noexcept;
 

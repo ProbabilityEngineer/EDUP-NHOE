@@ -47,8 +47,10 @@ def main():
             print("PASS", name, flush=True)
 
         for name in ("natural_gain", "motor_ownership_policy", "vr_haptics", "mac_haptics", "mac_controller_check",
-                     "native_motion_metadata", "onfoot_haptics", "sco_haptics", "openxr_output"):
+                     "native_motion_metadata", "onfoot_haptics", "ship_weapon_motion", "ship_motion_playback", "sco_haptics", "openxr_output"):
             run(name, build / (name + "_verification.exe"))
+        run("session_retention", build / "session_retention_verification.exe", [windows(owned / "session-retention")])
+        run("ship_motion_ordering", build / "ship_motion_ordering_verification.exe")
         trace = owned / "native-impact-recording"
         trace.mkdir()
         run("native_impact_recording", build / "onfoot_event_trace_verification.exe", [windows(trace)], result=True)
@@ -71,10 +73,16 @@ def main():
                 raise RuntimeError("Native launcher arguments changed or lost literal path characters")
         backend = windows(build / "verification/backend/ed_rumble_real_xinput9_1_0.dll")
         run("minhook_image_fallback", build / "minhook_image_fallback_verification.exe", [backend])
+        for mode in ("patch-restore", "remove-retry", "create-retry", "rip-range", "patch-clearance", "near-retry",
+                     "thread-context"):
+            run("minhook_image_" + mode.replace("-", "_"), build / "minhook_image_fallback_verification.exe",
+                [backend, mode])
         for mode in ("verified", "unknown"):
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)
             run("crossover_output_" + mode, build / "crossover_output_verification.exe", [backend, mode], result=True)
         run("crossover_output_alias", build / "crossover_output_verification.exe", [backend, "alias"], result=True)
+        run("output_shutdown", build / "xinput_output_verification.exe", [backend, "shutdown"], result=True)
+        run("crossover_output_shutdown", build / "crossover_output_verification.exe", [backend, "shutdown"], result=True)
         run("page_protection_copy_on_write", build / "page_protection_verification.exe", result=True)
         run("page_protection_readonly_reproduces_fault", build / "page_protection_verification.exe", ["readonly"], result=True)
         run("motor_headroom_frame_slot", build / "motor_headroom_slot_verification.exe")

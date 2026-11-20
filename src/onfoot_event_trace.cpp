@@ -481,6 +481,14 @@ DWORD StartOnFootEventSources(Address image, std::size_t size, bool verified,
   return StartTrace(image,size,verified,false,nullptr,nullptr,consumer,ship_begin);
 }
 void ClearOnFootEventConsumer() noexcept { numeric_consumer.store(nullptr,std::memory_order_release); }
+bool ShipMotionStopReady() noexcept {
+  return original_event_action.load(std::memory_order_acquire) != nullptr &&
+         (hook_mask.load(std::memory_order_acquire) & kEventActionHook);
+}
+bool StopShipMotion(U32 event, U64 object, U32 playing) noexcept {
+  const auto action = original_event_action.load(std::memory_order_acquire);
+  return action && playing && action(event,0,object,0,0,playing) == 1;
+}
 DWORD StartOnFootEventRecording(const wchar_t* directory) noexcept {
   AcquireSRWLockExclusive(&lifecycle);
   if (!started.load() || installation_error.load() || worker || file != INVALID_HANDLE_VALUE ||

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.1-preview.8
+
+- Reconnect captured small fixed railgun and medium fixed cannon firing variants to their existing authored Motion cues on verified player-attached hardpoints.
+- Suppress duplicate cues and cancel delayed output when ownership, focus or emitter lifetime changes. Report successful and rejected Motion posts in the session status.
+- Include the CrossOver ARM/FEX hook allocation fallback with checked page protections, retryable cleanup and instruction relocation bounds.
+- Retain the current diagnostic session and the four newest inactive sessions across all packages.
+
 ## 0.12.1-preview.7 (unreleased)
 
 - Keep the amplitude cap for the two authored main-motor channels through a verified audio callback when CrossOver cannot allocate the regular motor-sender hook.

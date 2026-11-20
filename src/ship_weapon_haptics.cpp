@@ -8,6 +8,13 @@ namespace {
 constexpr std::uint32_t kAttachedToPlayer = 1497268741;
 constexpr std::uint64_t kHeldTimeoutMs = 20000;
 constexpr std::uint64_t kDuplicateMs = 20;
+constexpr std::uint64_t kMotionExpiryMs = 100;
+
+const ShipMotionLink* FindMotionLink(std::uint32_t id) noexcept {
+  for (const auto& link : kShipMotionLinks)
+    if (id == link.firing || id == link.native_firing) return &link;
+  return nullptr;
+}
 
 enum class CueRole { Start, Stop, Shot };
 struct Cue {
@@ -104,7 +111,7 @@ bool ShipWeaponHaptics::Observes(OnFootInputKind kind, std::uint32_t id) noexcep
     case OnFootInputKind::Parameter:
       return id == kAttachedToPlayer;
     case OnFootInputKind::Post:
-      return FindCue(id) != nullptr;
+      return FindCue(id) || FindMotionLink(id);
     case OnFootInputKind::StopPlayedEvent: {
       const auto* cue = FindCue(id);
       return cue && cue->role == CueRole::Start && cue->profile->family == ShipWeaponFamily::Beam;
@@ -115,8 +122,15 @@ bool ShipWeaponHaptics::Observes(OnFootInputKind kind, std::uint32_t id) noexcep
 }
 
 void ShipWeaponHaptics::SetActive(bool active) noexcept {
-  if (active_ && !active)
-    for (auto& actor : actors_) actor.voice = {};
+  if (active_ && !active) {
+    if (cancel_motion_) cancel_motion_(0);
+    for (auto& actor : actors_) {
+      actor.voice = {};
+      actor.motions = {};
+      actor.owned_motion = false;
+      actor.motion_quiet_until = 0;
+    }
+  }
   active_ = active;
 }
 
@@ -126,9 +140,16 @@ ShipWeaponHaptics::Actor* ShipWeaponHaptics::Find(std::uint64_t object) noexcept
   return nullptr;
 }
 
+void ShipWeaponHaptics::CancelMotion(Actor& actor) noexcept {
+  if (actor.owned_motion && cancel_motion_) cancel_motion_(actor.object);
+  actor.owned_motion = false;
+  actor.motions = {};
+  actor.motion_quiet_until = 0;
+}
 void ShipWeaponHaptics::Register(std::uint64_t object, Actor* existing) noexcept {
+  if (existing) CancelMotion(*existing);
   auto* actor = existing ? existing : Find(0);
-  if (actor) *actor = {object, false, {}};
+  if (actor) *actor = {object};
   else overflowed_ = true;
 }
 
@@ -138,16 +159,26 @@ void ShipWeaponHaptics::Accept(const OnFootInput& input, bool permitted, bool ov
   switch (input.kind) {
     case OnFootInputKind::Register:
       if (overlapping) {
-        if (actor) *actor = {};
+        if (actor) {
+          CancelMotion(*actor);
+          *actor = {};
+        }
       } else if (input.result == 1) Register(input.object, actor);
       return;
     case OnFootInputKind::Unregister:
-      if (actor && (overlapping || input.result == 1)) *actor = {};
+      if (actor && (overlapping || input.result == 1)) {
+        CancelMotion(*actor);
+        *actor = {};
+      }
       return;
     case OnFootInputKind::Parameter:
       if (actor && input.id == kAttachedToPlayer && (overlapping || input.result == 1)) {
         actor->attached = !overlapping && input.value == 1;
-        if (!actor->attached) actor->voice = {};
+        if (!actor->attached) {
+          CancelMotion(*actor);
+          actor->voice = {};
+          actor->motions = {};
+        }
       }
       return;
     case OnFootInputKind::Post:
@@ -162,10 +193,48 @@ void ShipWeaponHaptics::Accept(const OnFootInput& input, bool permitted, bool ov
   if (!actor) return;
   auto& voice = actor->voice;
   if (overlapping) {
+    CancelMotion(*actor);
     voice = {};
+    actor->motions = {};
     return;
   }
   if (!input.playing) return;
+  if (const auto* link = FindMotionLink(input.id)) {
+    if (!active_ || !permitted || !actor->attached) return;
+    const auto now = input.milliseconds;
+    if (now < actor->motion_quiet_until) return;
+    const bool native = input.id == link->native_firing;
+    Actor::Motion* paired = nullptr;
+    auto closest = kDuplicateMs;
+    for (auto& motion : actor->motions) {
+      const auto retention = motion.pending ? kMotionExpiryMs : kDuplicateMs;
+      if (motion.event && now >= motion.cue && now - motion.cue >= retention) motion = {};
+      if (motion.event != link->motion) continue;
+      const auto distance = now >= motion.cue ? now - motion.cue : motion.cue - now;
+      if (distance >= kDuplicateMs) continue;
+      if (!native && !motion.native) return;  // Duplicate audio-only alias.
+      if (motion.native != native && !motion.paired && distance < closest) {
+        paired = &motion;
+        closest = distance;
+      }
+    }
+    if (paired) {
+      paired->paired = true;
+      paired->pending = false;
+      if (native) return;  // This alternate belongs to exactly one audio shot.
+    }
+    for (auto& motion : actor->motions) {
+      if (!motion.event) {
+        motion = {link->motion, now, !native && !paired, native, paired != nullptr};
+        return;
+      }
+    }
+    // Saturation quiets this emitter briefly. Dropped native-pair history must
+    // never let an alias inject duplicate output or fault unrelated feedback.
+    actor->motions = {};
+    actor->motion_quiet_until = Deadline(now,kDuplicateMs);
+    return;
+  }
   const auto* cue = FindCue(input.id);
   if (!cue) return;
   const auto& profile = *cue->profile;
@@ -226,5 +295,30 @@ HapticFrame ShipWeaponHaptics::Sample(std::uint64_t now, PendingCall pending) no
     if (actor.voice.profile && (!pending || !pending(actor.object)))
       frame = HapticMaximum(frame, SampleVoice(actor.voice, now));
   return frame;
+}
+
+ShipMotionDispatch ShipWeaponHaptics::DispatchMotion(std::uint64_t now, ShipMotionPost post,
+                                                      PendingCall pending) noexcept {
+  ShipMotionDispatch result{};
+  if (!active_) return result;
+  for (auto& actor : actors_) {
+    for (auto& motion : actor.motions) {
+      if (!motion.pending) continue;
+      if (!post) { motion = {}; continue; }
+      if (now < motion.cue) continue;
+      const auto elapsed = now - motion.cue;
+      if (elapsed >= kMotionExpiryMs) { motion = {}; continue; }
+      // Pairing uses cue timestamps, independent of worker cadence.
+      if (elapsed < kDuplicateMs || (pending && pending(actor.object))) continue;
+      const auto submitted = post(motion.event,actor.object);
+      if (submitted == ShipMotionResult::Deferred) continue;
+      motion.pending = false;
+      if (submitted == ShipMotionResult::Posted) {
+        actor.owned_motion = true;
+        ++result.posted;
+      } else ++result.rejected;
+    }
+  }
+  return result;
 }
 }  // namespace edtrace

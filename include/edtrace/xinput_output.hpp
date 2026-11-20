@@ -27,6 +27,12 @@ void XInputOutputRequireScopedWwiseFrames() noexcept;
 // separate: a focused VR session must not enable background XInput fallback.
 void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool gamepad_focused = true,
                          bool unique_gamepad = true) noexcept;
+// Keep the verified authored writer quiet on both original and routed slots
+// until native gain restoration completes. Other callers retain forwarding.
+void XInputOutputBeginShutdown() noexcept;
+DWORD XInputOutputServiceShutdown() noexcept;
+// Call only once gain restoration and output binding restoration succeeded.
+void XInputOutputEndShutdown() noexcept;
 XInputOutputStats XInputOutputGetStats() noexcept;
 MotorBackend XInputOutputNativeBackend() noexcept;
 // Supplemental output is mixed per motor with the latest authored frame.

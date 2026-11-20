@@ -115,6 +115,43 @@ Post volatile call_post = &OwnedPost;
 Rtpc volatile call_rtpc = &OwnedRtpc;
 EventAction volatile call_event_action = &OwnedEventAction;
 std::int32_t (WINAPI* volatile call_register)(U64) = &OwnedRegister;
+U32 observed_ship_motion = 0;
+U64 observed_ship_object = 0;
+bool replace_during_motion = false;
+bool overflow_during_motion = false;
+unsigned motion_native_calls = 0;
+bool motion_native_active = false;
+unsigned motion_cancels = 0;
+unsigned failed_cancels = 0;
+bool CancelObservedMotion(U64) noexcept {
+  ++motion_cancels;
+  if (failed_cancels) { --failed_cancels; return false; }
+  motion_native_active = false;
+  return true;
+}
+edtrace::ShipMotionResult ObserveShipMotion(U32 event, U64 object) noexcept {
+  ++motion_native_calls;
+  motion_native_active = true;
+  observed_ship_motion = event;
+  observed_ship_object = object;
+  if (replace_during_motion) {
+    edtrace::OnFootInput input{edtrace::OnFootInputKind::Unregister,object,fixture_time};
+    input.result = 1;
+    input.ship = edtrace::BeginShipWeaponInput(input.kind,object,0);
+    edtrace::QueueOnFootInput(input);
+    input.kind = edtrace::OnFootInputKind::Register;
+    input.ship = edtrace::BeginShipWeaponInput(input.kind,object,0);
+    edtrace::QueueOnFootInput(input);
+  }
+  if (overflow_during_motion) {
+    for (unsigned i = 0; i < 2050; ++i) {
+      edtrace::OnFootInput input{edtrace::OnFootInputKind::Post,object,fixture_time,252839122u,0,31337};
+      input.ship = edtrace::BeginShipWeaponInput(input.kind,object,input.id);
+      edtrace::QueueOnFootInput(input);
+    }
+  }
+  return edtrace::ShipMotionResult::Posted;
+}
 edtrace::ShipWeaponAdmission AdmitShip(edtrace::OnFootInputKind kind, U64 object, U32 id) noexcept {
   auto admission = edtrace::BeginShipWeaponInput(kind,object,id);
   if (admission.tracked && kind == edtrace::OnFootInputKind::Parameter) ++ship_admissions;
@@ -137,12 +174,12 @@ void WINAPI CallbackToken(std::int32_t,void*) {}
 template <typename T> Address Bits(T pointer) {
   Address value = 0; static_assert(sizeof(value) == sizeof(pointer)); std::memcpy(&value,&pointer,sizeof(value)); return value;
 }
-void PostEvent(U32 event) {
+void PostEvent(U32 event, U64 object = 42) {
   std::array<U64,2> opaque{{0x1122334455667788ULL,0x9988776655443322ULL}};
   const auto original = opaque; SetLastError(0x1212);
-  const U32 result = call_post(event,42,9,&CallbackToken,opaque.data()+1,opaque.data(),901);
+  const U32 result = call_post(event,object,9,&CallbackToken,opaque.data()+1,opaque.data(),901);
   Check(result == (event == 1851848329u ? 0u : 31337u) && GetLastError() == 0x2323,"Post result/outgoing LastError changed");
-  Check(post_observed.event == event && post_observed.object == 42 && post_observed.flags == 9 &&
+  Check(post_observed.event == event && post_observed.object == object && post_observed.flags == 9 &&
         post_observed.callback == &CallbackToken && post_observed.cookie == opaque.data()+1 &&
         post_observed.external == opaque.data() && post_observed.playing == 901 && post_observed.error == 0x1212 && opaque == original,
         "Post arguments, opaque memory or incoming LastError changed");
@@ -198,7 +235,7 @@ int wmain(int argc,wchar_t** argv) {
     const auto missing_directory = std::wstring(argv[1]) + L"\\nonexistent";
     Check(edtrace::StartOnFootEventTraceControlledFixture(target,missing_directory.c_str()) == ERROR_PATH_NOT_FOUND,
           "initial recorder accepted an unavailable log directory");
-    edtrace::StartOnFootFeedback(0,true,1,false);
+    edtrace::StartOnFootFeedback(0,true,1,false,&ObserveShipMotion,&CancelObservedMotion);
     Check(edtrace::StartOnFootEventSourcesControlledFixture(target,&Consume,&AdmitShip) == ERROR_SUCCESS,
           "the initial file error blocked a fresh start");
     Check(edtrace::StartOnFootEventRecording(missing_directory.c_str()) != ERROR_SUCCESS &&
@@ -274,7 +311,59 @@ int wmain(int argc,wchar_t** argv) {
     BeamAction(0,31337,3500);
     edtrace::TickOnFootFeedback(false,fixture_time,{},true);
     Check(!edtrace::HapticNonzero(output),"a direct Stop clears beam feedback immediately even with a long audio fade");
-    edtrace::StopOnFootFeedback();
+    fixture_time = 500;
+    PostEvent(252839122u);
+    edtrace::TickOnFootFeedback(false,525,{},true);
+    const auto ship_motion = edtrace::GetOnFootRuntimeStats();
+    Check(ship_motion.ship_motion_posts == 1 && observed_ship_motion == 1472761002u &&
+          observed_ship_object == 42 && !edtrace::HapticNonzero(output),
+          "captured railgun cue dispatches only authored Motion through the gameplay worker");
+    edtrace::SetShipWeaponFeedbackStrength(0);
+    fixture_time = 600;
+    PostEvent(2249258127u);
+    edtrace::TickOnFootFeedback(false,625,{},true);
+    edtrace::SetShipWeaponFeedbackStrength(1);
+    edtrace::TickOnFootFeedback(false,645,{},true);
+    Check(edtrace::GetOnFootRuntimeStats().ship_motion_posts == 1,
+          "strength zero discards the cue without dispatching on re-enable");
+    edtrace::SetShipWeaponFeedbackStrength(0);
+    edtrace::OnFootInput delayed{edtrace::OnFootInputKind::Post,42,700,252839122u,0,31337};
+    delayed.ship = edtrace::BeginShipWeaponInput(delayed.kind,42,delayed.id);
+    edtrace::SetShipWeaponFeedbackStrength(1);
+    edtrace::QueueOnFootInput(delayed);
+    edtrace::TickOnFootFeedback(false,725,{},true);
+    Check(edtrace::GetOnFootRuntimeStats().ship_motion_posts == 1,
+          "a firing result admitted at zero strength cannot revive on re-enable");
+    replace_during_motion = true;
+    fixture_time = 800;
+    PostEvent(252839122u);
+    edtrace::TickOnFootFeedback(false,825,{},true);
+    const auto reentered = edtrace::GetOnFootRuntimeStats();
+    Check(reentered.ship_motion_posts == 1 && reentered.ship_motion_rejected == 1 &&
+          !motion_native_active,
+          "native post reentrancy can publish lifecycle changes and cancels its own stale correction");
+    replace_during_motion = false;
+    fixture_time = 1000;
+    call_register(42);
+    Parameter(1497268741u,1);
+    call_register(43);
+    Parameter(1497268741u,1,43);
+    edtrace::TickOnFootFeedback(false,1000,{},true);
+    fixture_time = 1100;
+    PostEvent(252839122u);
+    fixture_time = 1101;
+    PostEvent(2249258127u,43);
+    const auto before_native_calls = motion_native_calls;
+    overflow_during_motion = true;
+    edtrace::TickOnFootFeedback(false,1125,{},true);
+    const auto overflowed = edtrace::GetOnFootRuntimeStats();
+    Check(overflowed.faulted && overflowed.ship_motion_posts == 1 &&
+          overflowed.ship_motion_rejected == 3 && motion_native_calls == before_native_calls + 1 &&
+          !motion_native_active && !edtrace::HapticNonzero(output),
+          "publication failure cancels the accepted post and prevents the next native dispatch");
+    failed_cancels = 1;
+    Check(!edtrace::StopOnFootFeedback(), "shutdown reports native stops that still need service");
+    Check(edtrace::StopOnFootFeedback(), "a subsequent shutdown service can complete native cancellation");
     edtrace::ClearOnFootEventConsumer(); Check(edtrace::StopOnFootEventTrace(),"final hook shutdown failed");
     Check(VerificationResult("PASS"),"result file failed"); std::puts("PASS bounded native impact recording and forwarding"); return 0;
   } catch (const std::exception& error) {

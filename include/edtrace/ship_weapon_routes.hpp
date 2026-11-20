@@ -14,6 +14,17 @@ struct ShipWeaponProfile {
   ShipWeaponSize size;
   ShipWeaponCues cues[2];
 };
+
+struct ShipMotionLink {
+  std::uint32_t firing, native_firing, motion;
+};
+// These firing variants play audio alone. Their alternate firing events
+// already play the linked Motion cue, which contains only the authored effect.
+inline constexpr ShipMotionLink kShipMotionLinks[] = {
+    {252839122u, 252839123u, 1472761002u},    // Small fixed railgun
+    {2249258127u, 2249258126u, 4102759559u},  // Medium fixed cannon
+};
+
 // LOD0 and LOD1 share each weapon's playback state.
 inline constexpr ShipWeaponProfile kShipWeaponProfiles[] = {
     {ShipWeaponFamily::Torpedo, ShipWeaponSize::Large, {{491878982u, 0, 0}, {491878983u, 0, 0}}},

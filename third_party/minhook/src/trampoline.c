@@ -27,6 +27,7 @@
  */
 
 #include <windows.h>
+#include <stdint.h>
 
 #if defined(_MSC_VER) && !defined(MINHOOK_DISABLE_INTRINSICS)
     #define ALLOW_INTRINSICS
@@ -151,6 +152,9 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct, LPBYTE code)
 
             // Modify the RIP relative address.
             PUINT32 pRelAddr;
+            INT64 displacement = (INT64)pOldInst - (INT64)pNewInst + (INT32)hs.disp.disp32;
+            if (displacement < INT32_MIN || displacement > INT32_MAX)
+                return FALSE;
 
             // Avoid using memcpy to reduce the footprint.
 #ifndef ALLOW_INTRINSICS
@@ -162,8 +166,7 @@ BOOL CreateTrampolineFunction(PTRAMPOLINE ct, LPBYTE code)
 
             // Relative address is stored at (instruction length - immediate value length - 4).
             pRelAddr = (PUINT32)(instBuf + hs.len - ((hs.flags & 0x3C) >> 2) - 4);
-            *pRelAddr
-                = (UINT32)((pOldInst + hs.len + (INT32)hs.disp.disp32) - (pNewInst + hs.len));
+            *pRelAddr = (UINT32)(INT32)displacement;
 
             // Complete the function if JMP (FF /4).
             if (hs.opcode == 0xFF && hs.modrm_reg == 4)

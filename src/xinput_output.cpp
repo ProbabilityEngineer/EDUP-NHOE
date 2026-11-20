@@ -18,6 +18,8 @@
 namespace edtrace { namespace {
 std::atomic<MotorBackend> original{nullptr};
 std::atomic<bool> installed{false}, ready{false};
+bool shutdown_mute = false, wwise_original_active = false;
+SRWLOCK original_slot_lock = SRWLOCK_INIT;
 #ifdef ED_CROSSOVER_COMPAT
 std::atomic<bool> require_scoped_wwise{false};
 #endif
@@ -51,6 +53,44 @@ Mixed Mix() noexcept {
           HapticUnit(onfoot_frame.left) > HapticUnit(authored_left) ? HapticUnit(onfoot_frame.left) : HapticUnit(authored_left),
           HapticUnit(onfoot_frame.right) > HapticUnit(authored_right) ? HapticUnit(onfoot_frame.right) : HapticUnit(authored_right),
           HapticNonzero(onfoot_frame)};
+}
+
+// Slot 1 can also be used by unrelated callers. Serialize its native writes
+// separately from mixing so only the latest successful writer owns a stop.
+DWORD ForwardOriginal(DWORD index, XINPUT_VIBRATION* vibration, bool authored) noexcept {
+  const auto incoming = GetLastError();
+  if (index == 1) AcquireSRWLockExclusive(&original_slot_lock);
+  XINPUT_VIBRATION value{}; SIZE_T count = 0;
+  const bool active = authored && vibration &&
+    ReadProcessMemory(GetCurrentProcess(),vibration,&value,sizeof(value),&count) && count == sizeof(value) &&
+    (value.wLeftMotorSpeed || value.wRightMotorSpeed);
+  SetLastError(incoming);
+  const auto result = original.load(std::memory_order_acquire)(index,vibration);
+  const auto outgoing = GetLastError();
+  if (index == 1) {
+    if (result == ERROR_SUCCESS) wwise_original_active = active;
+    ReleaseSRWLockExclusive(&original_slot_lock);
+  }
+  SetLastError(outgoing); return result;
+}
+DWORD WINAPI UnownedOriginal(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
+  return ForwardOriginal(index,vibration,false);
+}
+DWORD WINAPI AuthoredOriginal(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
+  return ForwardOriginal(index,vibration,true);
+}
+DWORD ServiceShutdown() noexcept {
+  auto outgoing = GetLastError();
+  AcquireSRWLockExclusive(&original_slot_lock);
+  DWORD result = ERROR_SUCCESS;
+  if (wwise_original_active && original.load(std::memory_order_acquire)) {
+    XINPUT_VIBRATION zero{};
+    result = original.load(std::memory_order_acquire)(1,&zero);
+    outgoing = GetLastError();
+    if (result == ERROR_SUCCESS) wwise_original_active = false;
+  }
+  ReleaseSRWLockExclusive(&original_slot_lock);
+  SetLastError(outgoing); return result;
 }
 
 DWORD WINAPI SelectedOutput(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
@@ -88,7 +128,7 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
     XINPUT_VIBRATION value{}; SIZE_T count = 0;
     const bool known = vibration && ReadProcessMemory(GetCurrentProcess(), vibration, &value, sizeof(value), &count) && count == sizeof(value);
     SetLastError(incoming);
-    const DWORD result = original.load(std::memory_order_acquire)(index, vibration);
+    const DWORD result = UnownedOriginal(index, vibration);
     const DWORD outgoing = GetLastError();
     runtime_calls.fetch_add(1, std::memory_order_relaxed);
     if (known && (value.wLeftMotorSpeed || value.wRightMotorSpeed)) runtime_nonzero_calls.fetch_add(1, std::memory_order_relaxed);
@@ -118,6 +158,16 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
   // Keep mixer updates and their backend submissions in one order. In
   // particular a delayed supplemental expiry cannot overtake an authored stop.
   if (wwise) AcquireSRWLockExclusive(&mixer_lock);
+  if (wwise && shutdown_mute && (index == 0 || index == 1)) {
+    // Muting discards the late request. Only retry a stop for a slot-1
+    // command still owned by Wwise; another observed writer keeps its output.
+    SetLastError(incoming);
+    const auto result = index == 1 ? ServiceShutdown() : ERROR_SUCCESS;
+    const auto outgoing = index == 1 && result != ERROR_SUCCESS ? GetLastError() : incoming;
+    ReleaseSRWLockExclusive(&mixer_lock);
+    SetLastError(outgoing);
+    return result;
+  }
   const bool enabled = ready.load(std::memory_order_acquire);
   if (wwise && known && !enabled && !gamepad_focused && RoutedIndex(enabled,writer,index) == 0) {
     ReleaseSRWLockExclusive(&mixer_lock); SetLastError(incoming); return ERROR_SUCCESS;
@@ -152,8 +202,9 @@ DWORD WINAPI Output(DWORD index, XINPUT_VIBRATION* vibration) noexcept {
     ;
   const bool trigger_active = managed && trigger_output && (mixed.left > 0 || mixed.right > 0);
   SetLastError(incoming);
-  const auto result = DispatchOwnedMotor(managed ? &SelectedOutput : original.load(std::memory_order_acquire), enabled, enabled,
-                                        writer, index, vibration, known, managed && known ? mixed.main : snapshot, nullptr, nullptr, trigger_active).result;
+  const auto dispatched = DispatchOwnedMotor(managed ? &SelectedOutput : (wwise ? &AuthoredOriginal : &UnownedOriginal), enabled, enabled,
+                                        writer, index, vibration, known, managed && known ? mixed.main : snapshot, nullptr, nullptr, trigger_active);
+  const auto result = dispatched.result;
   const DWORD outgoing = GetLastError();
   selected_request_known = saved_known; selected_request = saved_request; selected_override = saved_override;
   selected_left = saved_left; selected_right = saved_right;
@@ -171,6 +222,7 @@ void XInputOutputRequireScopedWwiseFrames() noexcept {
 DWORD XInputOutputStart(MotorBackend target, std::uintptr_t image, std::size_t size, bool verified, MotorBackend dynamic_target) noexcept {
   if (!verified || !image || size <= kWwiseRetryReturnRva || !target) return ERROR_REVISION_MISMATCH;
   if (original.load()) return ERROR_ALREADY_INITIALIZED;
+  shutdown_mute = wwise_original_active = false;
   main_image = image; main_size = size;
 #ifdef ED_CROSSOVER_COMPAT
   original.store(target, std::memory_order_release);
@@ -233,6 +285,26 @@ void XInputOutputSetReady(bool gain_enabled, bool controller_connected, bool foc
     fallback_active = false;
   }
   ReleaseSRWLockExclusive(&mixer_lock); SetLastError(incoming);
+}
+void XInputOutputBeginShutdown() noexcept {
+  const auto incoming = GetLastError();
+  AcquireSRWLockExclusive(&mixer_lock);
+  shutdown_mute = true;
+  ServiceShutdown();
+  ReleaseSRWLockExclusive(&mixer_lock);
+  SetLastError(incoming);
+}
+DWORD XInputOutputServiceShutdown() noexcept {
+  const auto incoming = GetLastError();
+  const auto result = ServiceShutdown();
+  SetLastError(incoming); return result;
+}
+void XInputOutputEndShutdown() noexcept {
+  const auto incoming = GetLastError();
+  AcquireSRWLockExclusive(&mixer_lock);
+  shutdown_mute = false;
+  ReleaseSRWLockExclusive(&mixer_lock);
+  SetLastError(incoming);
 }
 XInputOutputStats XInputOutputGetStats() noexcept {
   return {error.load(), installed.load(std::memory_order_acquire), ready.load(std::memory_order_acquire), calls.load(), wwise_calls.load(),

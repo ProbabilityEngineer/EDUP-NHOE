@@ -181,8 +181,8 @@ extern "C" {
     // The caller must validate the executable and the affected platform first.
     BOOL WINAPI MH_EnableMainImageFallback(VOID);
 
-    // EDUP-NHOE: number of trampolines currently placed in executable section
-    // padding because no memory could be allocated near their targets.
+    // EDUP-NHOE: occupied fallback slots in executable section padding,
+    // including slots awaiting cleanup after a failed creation or removal.
     UINT WINAPI MH_GetFallbackSlotsInUse(VOID);
 
     // Translates the MH_STATUS to its name as a string.

@@ -3,6 +3,8 @@
 namespace {
 SRWLOCK lock = SRWLOCK_INIT;
 MockSnapshot snapshot{};
+DWORD stop_failures = 0;
+bool stop_preserves_error = false;
 HANDLE entered = nullptr;
 HANDLE release = nullptr;
 }
@@ -14,6 +16,10 @@ extern "C" void WINAPI MockReset() {
   if (!release) release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   ResetEvent(entered); ResetEvent(release);
   ReleaseSRWLockExclusive(&lock);
+}
+
+extern "C" void WINAPI MockFailStops(DWORD count) {
+  AcquireSRWLockExclusive(&lock); stop_failures = count & 0x7fffffff; stop_preserves_error = (count & 0x80000000) != 0; ReleaseSRWLockExclusive(&lock);
 }
 
 extern "C" void WINAPI MockRead(MockSnapshot* result) {
@@ -29,7 +35,11 @@ extern "C" DWORD WINAPI XInputSetState(DWORD index, XINPUT_VIBRATION* vibration)
   snapshot.index = index; snapshot.pointer = reinterpret_cast<ULONG_PTR>(vibration); snapshot.incoming_error = incoming_error;
   snapshot.left = 0; snapshot.right = 0;
   if (vibration && reinterpret_cast<ULONG_PTR>(vibration) != 1) { snapshot.left = vibration->wLeftMotorSpeed; snapshot.right = vibration->wRightMotorSpeed; }
+  const bool fail = index == 1 && !snapshot.left && !snapshot.right && stop_failures;
+  const bool preserve = stop_preserves_error;
+  if (fail) --stop_failures;
   ReleaseSRWLockExclusive(&lock);
+  if (fail) { SetLastError(preserve ? incoming_error : 0x77665544); return ERROR_BUSY; }
   if (index == 42) { SetEvent(entered); WaitForSingleObject(release, 10000); }
   if (!vibration) { SetLastError(0x55aa0000); return ERROR_INVALID_PARAMETER; }
   if (reinterpret_cast<ULONG_PTR>(vibration) == 1) { SetLastError(0x55aa0001); return ERROR_NOACCESS; }

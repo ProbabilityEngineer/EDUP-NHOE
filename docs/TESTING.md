@@ -24,3 +24,11 @@ Native ship impact, collision and friction effects use the shared restored Motio
 When a support test explicitly enables the optional bounded recorder, its queue records now identify these known native routes and their play/stop source associations. They also retain selected `shield_strength_self`, `hull_strength_self`, `collision_velocity` and `friction_velocity` requests for timing comparisons. A recorded route is not proof that its nested source executed or that the affected ship was yours; ownership remains `unknown`. The self-strength parameter scale still needs live verification, and targeted-ship journal shield values must not be used as your own shield readings.
 
 Each manually started observation stops within ten minutes and must end before the next test is started. The recorder consumes the request before recording so a leftover marker cannot reopen it on relaunch. Removing the marker cancels the current observation. The time limit applies to each observation window.
+
+For the small fixed railgun and medium fixed cannon, test one discharge at a
+time with `[ShipCombat]` enabled and a nonzero strength. The audio-only
+firing variants can now call the matching authored Motion at its native
+gain. Charging the railgun and nearby impacts should leave the linked
+firing counters unchanged. The session status counts accepted and failed Motion posts in
+`ship_motion_posts` and `ship_motion_rejected`. Feel the effect on hardware
+to confirm delivery.

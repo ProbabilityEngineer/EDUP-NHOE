@@ -26,6 +26,7 @@ The game still dispatches the original Motion effects. EDUP - NHOE restores the 
 | Area | Implemented | Next milestone |
 | --- | --- | --- |
 | Authored output | Restores the shared Motion path and preserves silence for an authored zero. [Runtime](src/restoration_runtime.cpp) | Test faint portions, fades and stops on hardware. Confirm repeatable playback with all added effects disabled. |
+| Ship discharge cues | Reconnects captured small fixed railgun and medium fixed cannon variants to their existing authored Motion cues with ShipCombat enabled. [Linked cues](include/edtrace/ship_weapon_routes.hpp) | Confirm authored discharge timing and strength on hardware. [Test procedure](docs/TESTING.md) |
 | Ship impacts | Diagnostic associations cover 27 impact, collision and friction event routes linked to 17 authored sources. The game controls when those effects play and stop. [Native motion metadata](include/edtrace/native_motion_routes.hpp) | Match the three unresolved Corvette routes to repeatable gameplay actions. Confirm local shield and hull damage ownership before adding damage feedback. |
 | Game compatibility | The runtime checks the exact supported game version before applying its in-memory changes. [Testing guide](docs/TESTING.md) | Validate each new Elite build and retest familiar authored effects before enabling it. |
 

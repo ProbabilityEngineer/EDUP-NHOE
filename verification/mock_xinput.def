@@ -9,3 +9,4 @@ EXPORTS
     MockWaitUntilBlocked @1003
     MockRelease @1004
     MockAlternateSet @1005
+    MockFailStops @1006

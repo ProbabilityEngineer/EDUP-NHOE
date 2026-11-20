@@ -68,19 +68,26 @@ bool Refresh() noexcept {
   if (imported != replacement) {
     faulted = true; failure.store(ERROR_ALREADY_EXISTS); return false;
   }
-  // The audio runtime owns clearing/reinitializing its binding. A null slot
-  // is a quiet wait, while a foreign writer is never reclaimed.
-  if (!dynamic) { failure.store(ERROR_NOT_READY); return false; }
-  if (dynamic != replacement) {
+  // A recognized rebind may change again before our compare-exchange. Retry
+  // bounded collisions; a null slot waits, and a foreign writer is preserved.
+  for (unsigned attempt = 0;; ++attempt) {
+    if (!dynamic) { failure.store(ERROR_NOT_READY); return false; }
+    if (dynamic == replacement) {
+      available.store(true,std::memory_order_release); failure.store(ERROR_SUCCESS); return true;
+    }
     if (dynamic != native_dynamic && dynamic != native_import) {
       faulted = true; failure.store(ERROR_ALREADY_EXISTS); return false;
     }
-    // A hybrid loader can use either of the two known XInput bindings.
-    const DWORD error = Exchange(wwise_slot, dynamic, replacement);
+    if (attempt == 3) { failure.store(ERROR_RETRY); return false; }
+    const DWORD error = Exchange(wwise_slot,dynamic,replacement);
+    if (error == ERROR_ALREADY_EXISTS) {
+      if (!Read(wwise_slot,dynamic)) { faulted = true; failure.store(ERROR_NOACCESS); return false; }
+      continue;
+    }
     if (error) { faulted = true; failure.store(error); return false; }
     previous_wwise = dynamic;
+    available.store(true,std::memory_order_release); failure.store(ERROR_SUCCESS); return true;
   }
-  available.store(true, std::memory_order_release); failure.store(ERROR_SUCCESS); return true;
 }
 }}
 

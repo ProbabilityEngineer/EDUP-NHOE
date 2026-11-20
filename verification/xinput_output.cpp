@@ -18,6 +18,23 @@
 #include <cwchar>
 #include <limits>
 
+#ifdef ED_CROSSOVER_COMPAT
+static void* rebind_race_slot = nullptr;
+static void* rebind_race_value = nullptr;
+static std::array<void*,3> rebind_race_values{};
+static unsigned rebind_race_count = 0, rebind_race_index = 0;
+extern "C" decltype(&VirtualProtect) __real___imp_VirtualProtect;
+static BOOL WINAPI ProtectFixture(void* address, SIZE_T size, DWORD protection, DWORD* old) {
+  const auto result = __real___imp_VirtualProtect(address,size,protection,old);
+  if (result && address == rebind_race_slot && protection == PAGE_READWRITE) {
+    *static_cast<void**>(address) = rebind_race_count ? rebind_race_values[rebind_race_index++] : rebind_race_value;
+    if (!rebind_race_count || rebind_race_index == rebind_race_count) rebind_race_slot = nullptr;
+  }
+  return result;
+}
+extern "C" { decltype(&VirtualProtect) __wrap___imp_VirtualProtect = &ProtectFixture; }
+#endif
+
 namespace {
 #ifdef ED_CROSSOVER_COMPAT
 std::uint64_t native_instant=100;
@@ -126,6 +143,14 @@ int wmain(int argc, wchar_t** argv) {
   } else Check(*import_slot==set&&!*audio_slot,"unknown profile changes neither output slot");
   if (!alias_at_start) *audio_slot=alternate;
   if(verified) Check(edtrace::XInputOutputRefresh(),"late audio binding supports a distinct interop thunk");
+  if (verified) {
+    *audio_slot = alternate; rebind_race_slot = audio_slot; rebind_race_value = reinterpret_cast<void*>(set);
+    Check(edtrace::XInputOutputRefresh(),"a recognized concurrent rebind remains guarded");
+    *audio_slot = alternate; rebind_race_slot = audio_slot; rebind_race_value = nullptr;
+    Check(!edtrace::XInputOutputRefresh() && !*audio_slot,"a concurrent null binding is a retryable quiet wait");
+    *audio_slot = set;
+    Check(edtrace::XInputOutputRefresh(),"a recognized binding recovers after a concurrent clear");
+  }
 #endif
   Check(!std::memcmp(get_before.data(), reinterpret_cast<void*>(get), get_before.size()) &&
         !std::memcmp(caps_before.data(), reinterpret_cast<void*>(caps), caps_before.size()), "detection and input entry points remain unchanged");
@@ -145,6 +170,84 @@ int wmain(int argc, wchar_t** argv) {
   Check(snapshot.index == (verified ? 0U : 1U) && snapshot.left == 12345 && snapshot.right == 54321 &&
         snapshot.pointer == reinterpret_cast<ULONG_PTR>(&pulse) && snapshot.incoming_error == 0x10293847,
         "only verified Wwise output routes to zero with original pointer and words");
+  if (std::wcscmp(argv[2],L"shutdown") == 0) {
+    edtrace::XInputOutputSetReady(false,true,true);
+    Check(wwise(1,&pulse) == ERROR_SUCCESS,"an unready authored writer can still reach its original slot");
+    read(&snapshot);
+    Check(snapshot.index == 1 && snapshot.left == 12345 && snapshot.right == 54321,
+          "the fixture has an active authored command on the original slot");
+    Check(engine(1,&pulse) == ERROR_SUCCESS,"an unrelated writer replaces the original authored command");
+    read(&snapshot); const auto unrelated_calls = snapshot.set_calls;
+    edtrace::XInputOutputBeginShutdown();
+    read(&snapshot);
+    Check(snapshot.set_calls == unrelated_calls,"shutdown never cancels the latest unrelated slot-1 writer");
+    edtrace::XInputOutputEndShutdown();
+    Check(wwise(1,&pulse) == ERROR_SUCCESS,"inactive forwarding resumes after successful shutdown");
+    read(&snapshot);
+    Check(snapshot.left == 12345 && snapshot.right == 54321,"ending the mute restores original Wwise forwarding");
+    const auto fail_stops = Symbol<void (WINAPI*)(DWORD)>(library,"MockFailStops");
+    fail_stops(0x80000002);
+    edtrace::XInputOutputBeginShutdown();
+    SetLastError(0xabcdef01);
+    Check(wwise(1,reinterpret_cast<XINPUT_VIBRATION*>(1)) == ERROR_BUSY && GetLastError() == 0xabcdef01,
+          "a refused late stop preserves caller LastError despite an unreadable request");
+    read(&snapshot); const auto refused_calls = snapshot.set_calls;
+    SetLastError(0x12345678);
+    Check(edtrace::XInputOutputServiceShutdown() == ERROR_SUCCESS && GetLastError() == 0x12345678,
+          "shutdown retries the zero to acceptance without changing caller LastError");
+    read(&snapshot);
+    Check(snapshot.set_calls == refused_calls + 1 && snapshot.index == 1 && snapshot.left == 0 && snapshot.right == 0,
+          "the retry sends a fresh zero to the backend rather than only reporting success");
+    edtrace::XInputOutputEndShutdown();
+    Check(wwise(1,&pulse) == ERROR_SUCCESS,"authored slot active for the pending-stop takeover");
+    fail_stops(1); edtrace::XInputOutputBeginShutdown();
+    Check(engine(1,&pulse) == ERROR_SUCCESS,"an observed writer takes over before the refused stop is retried");
+    read(&snapshot); const auto takeover_calls = snapshot.set_calls;
+    Check(wwise(1,&pulse) == ERROR_SUCCESS && retry(1,&pulse) == ERROR_SUCCESS &&
+          edtrace::XInputOutputServiceShutdown() == ERROR_SUCCESS,"late writes and retry service respect takeover");
+    read(&snapshot);
+    Check(snapshot.set_calls == takeover_calls && snapshot.left == 12345 && snapshot.right == 54321,
+          "no backend stop is injected after an observed takeover of a pending authored command");
+    edtrace::XInputOutputEndShutdown();
+    Check(wwise(1,&pulse) == ERROR_SUCCESS,"authored output resumes for the final quieting check");
+    edtrace::XInputOutputBeginShutdown();
+    edtrace::XInputOutputSetReady(false,false,false);
+    read(&snapshot);
+    Check(snapshot.index == 1 && snapshot.left == 0 && snapshot.right == 0,
+          "shutdown clears an authored command already sent to the original slot");
+    Check(wwise(1,&pulse) == ERROR_SUCCESS && retry(1,&pulse) == ERROR_SUCCESS,
+          "late shared and termination writes are accepted as quiet commands");
+    read(&snapshot);
+    Check(snapshot.index == 1 && snapshot.left == 0 && snapshot.right == 0,
+          "Wwise cannot revive its original slot while native stops are pending");
+    Check(set(1,&pulse) == ERROR_SUCCESS,"an unrelated caller retains its command");
+    read(&snapshot);
+    Check(snapshot.index == 1 && snapshot.left == 12345 && snapshot.right == 54321,
+          "shutdown muting preserves unrelated callers");
+    Check(wwise(1,&pulse) == ERROR_SUCCESS && retry(1,&pulse) == ERROR_SUCCESS,
+          "late muted requests are discarded after an unrelated writer takes over");
+    read(&snapshot);
+    Check(snapshot.index == 1 && snapshot.left == 12345 && snapshot.right == 54321,
+          "late muted Wwise writes preserve another observed writer's slot-1 command");
+    Check(wwise(4,&pulse) == ERROR_SUCCESS,"other authored indices retain forwarding");
+    read(&snapshot);
+    Check(snapshot.index == 4 && snapshot.left == 12345 && snapshot.right == 54321,
+          "shutdown muting is limited to the verified route's two slots");
+    Check(wwise(1,&zero) == ERROR_SUCCESS,"the owned test slot ends quiet");
+#ifdef ED_CROSSOVER_COMPAT
+    *audio_slot = alternate; rebind_race_slot = audio_slot;
+    rebind_race_values = {reinterpret_cast<void*>(set),reinterpret_cast<void*>(alternate),reinterpret_cast<void*>(unrelated_export)};
+    rebind_race_count = 3; rebind_race_index = 0;
+    Check(!edtrace::XInputOutputRefresh() && edtrace::OutputSlotsError() == ERROR_ALREADY_EXISTS && *audio_slot == unrelated_export,
+          "a foreign binding observed on the final collision is preserved and latched");
+    *audio_slot = alternate;
+    Check(!edtrace::XInputOutputRefresh(),"a known binding cannot erase the observed foreign-writer fault");
+    Check(edtrace::OutputSlotsStop() == ERROR_SUCCESS,"owned CrossOver bindings restore after the shutdown test");
+#endif
+    Check(VerificationResult("PASS"),"shutdown result file written");
+    std::puts("PASS scoped authored shutdown mute");
+    return 0;
+  }
   const auto calls = snapshot.set_calls;
   SetLastError(0x55554444); Check(engine(0, &zero) == 0, "engine stop returns success");
   if (verified) Check(GetLastError() == 0x55554444, "suppressed engine stop preserves incoming LastError");

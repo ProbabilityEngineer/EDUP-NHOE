@@ -8,7 +8,7 @@ enum class OnFootInputKind : std::uint32_t { Post, Parameter, Switch, Register, 
 struct ShipWeaponAdmission {
   std::uint64_t activity = 0;
   std::uint32_t generation = 0;
-  bool tracked = false, overlapping = false;
+  bool tracked = false, overlapping = false, owns_gate = false;
 };
 struct OnFootInput {
   OnFootInputKind kind = OnFootInputKind::Post;

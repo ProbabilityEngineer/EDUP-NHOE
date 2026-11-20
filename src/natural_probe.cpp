@@ -1,5 +1,9 @@
 #include "edtrace/natural_probe.hpp"
 #include "edtrace/natural_gain_control.hpp"
+#include "edtrace/ship_weapon_haptics.hpp"
+#include "edtrace/ship_motion_playback.hpp"
+#include "edtrace/onfoot_event_trace.hpp"
+#include "edtrace/onfoot_runtime.hpp"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -13,7 +17,9 @@ using LoadFn = int (WINAPI*)(const void*, U32, U32*);
 using RegisterFn = int (WINAPI*)(U64);
 using UnloadFn = int (WINAPI*)(U32, const void*);
 enum class CallbackType : int {};
-struct CallbackInfo;
+// Wwise's public AkCallbackInfo ABI begins with the supplied user cookie.
+// https://github.com/audiokinetic/WwiseIncludes/blob/master/SDK/include/AK/SoundEngine/Common/AkCallback.h
+struct CallbackInfo { void* cookie; };
 using Callback = void (WINAPI*)(CallbackType, CallbackInfo*);
 struct ExternalSource;
 using PostFn = U32 (WINAPI*)(U32, U64, U32, Callback, void*, U32, ExternalSource*, U32);
@@ -23,8 +29,16 @@ LoadFn load_bank = nullptr;
 RegisterFn register_object = nullptr, unregister_object = nullptr;
 UnloadFn unload_bank = nullptr;
 PostFn post_event = nullptr;
+ShipMotionPlayback ship_motion_playback;
+void WINAPI MotionEnded(CallbackType type, CallbackInfo* info) noexcept {
+  if (static_cast<int>(type) == 1 && info) ShipMotionPlayback::Complete(info->cookie);
+}
+U32 PostMotion(U32 event, U64 object, void* cookie) noexcept {
+  if (!ShipMotionAdmissionOpen(object)) return 0;
+  return post_event(event,object,1,&MotionEnded,cookie,0,nullptr,0);
+}
 HANDLE stop_event = nullptr, done_event = nullptr, worker = nullptr;
-std::atomic<DWORD> error{0};
+std::atomic<DWORD> error{0}, stop_error{0};
 std::wstring output_dir;
 bool registered = false, bank_loaded = false;
 bool session_restoration = false;
@@ -126,6 +140,18 @@ template <typename T> bool Resolve(T& target, const char* name) noexcept {
   const auto address = GetProcAddress(reinterpret_cast<HMODULE>(image), name);
   static_assert(sizeof(target) == sizeof(address)); std::memcpy(&target, &address, sizeof(target)); return target != nullptr;
 }
+void RestoreUntilObserved(MotionGainControl& control) noexcept {
+  const auto deadline = GetTickCount64() + 5000;
+  while (control.owns_change()) {
+    control.Observe(); control.Restore(); control.Observe();
+    restoration_owned.store(control.owns_change(),std::memory_order_release);
+    if (control.owns_change()) {
+      if (GetTickCount64() >= deadline) stop_error.store(ERROR_TIMEOUT,std::memory_order_release);
+      Sleep(20);
+    }
+  }
+  stop_error.store(ERROR_SUCCESS,std::memory_order_release);
+}
 DWORD WINAPI Run(void*) noexcept {
   HANDLE log = INVALID_HANDLE_VALUE;
   MotionGainControl control(true, {nullptr, State, CollisionFree, Load, Post}, session_restoration);
@@ -183,13 +209,10 @@ DWORD WINAPI Run(void*) noexcept {
       }
     }
     restoration_enabled.store(false, std::memory_order_release);
-    const ULONGLONG deadline = GetTickCount64() + 5000;
-    while (control.owns_change() && GetTickCount64() < deadline) {
-      control.Observe(); control.Restore(); control.Observe();
-      if (control.owns_change()) Sleep(20);
-    }
-    record(control.owns_change() ? "restoration_unconfirmed" : "restored_or_no_change");
-    if (control.owns_change()) error.store(ERROR_TIMEOUT);
+    // Report delayed readback separately; retain the observer until it sees
+    // restoration so a late native completion can still finish teardown.
+    RestoreUntilObserved(control);
+    record("restored_or_no_change");
     // Leave a failed/pending bank resident until exit rather than cancelling its actions.
     if (!control.owns_change()) {
       if (bank_loaded && unload_bank(gain_bank::bank, nullptr) != 1) error.store(ERROR_GEN_FAILURE);
@@ -198,14 +221,7 @@ DWORD WINAPI Run(void*) noexcept {
   } catch (...) { error.store(ERROR_NOT_ENOUGH_MEMORY); }
   restoration_enabled.store(false, std::memory_order_release);
   // Restoration must still be attempted after a writer/allocation failure.
-  if (control.owns_change()) {
-    const ULONGLONG deadline = GetTickCount64() + 5000;
-    while (control.owns_change() && GetTickCount64() < deadline) {
-      control.Observe(); control.Restore(); control.Observe();
-      if (control.owns_change()) Sleep(20);
-    }
-    if (control.owns_change()) error.store(ERROR_TIMEOUT);
-  }
+  RestoreUntilObserved(control);
   if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
   restoration_owned.store(control.owns_change(), std::memory_order_release);
   SetEvent(done_event); return 0;
@@ -231,6 +247,15 @@ DWORD NaturalProbeStart(std::uintptr_t base, bool verified, const std::wstring& 
     return worker ? ERROR_SUCCESS : GetLastError();
   } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
 }
+bool NaturalProbePollStop(DWORD& result) noexcept {
+  result = ERROR_SUCCESS;
+  if (!worker) return true;
+  SetEvent(stop_event);
+  const auto wait = WaitForSingleObject(done_event,0);
+  if (wait == WAIT_TIMEOUT) { result = stop_error.load(std::memory_order_acquire); return false; }
+  result = wait == WAIT_OBJECT_0 ? error.load() : GetLastError();
+  return true;
+}
 DWORD NaturalProbeStop(DWORD timeout_ms) noexcept {
   if (!worker) return ERROR_SUCCESS;
   SetEvent(stop_event);
@@ -253,5 +278,19 @@ DWORD NaturalRestorationStart(std::uintptr_t base, bool verified, const std::wst
 }
 NaturalRestorationStatus NaturalRestorationGetStatus() noexcept {
   return {error.load(), restoration_enabled.load(std::memory_order_acquire), restoration_owned.load(std::memory_order_acquire)};
+}
+ShipMotionResult PostAuthoredShipMotion(std::uint32_t event, std::uint64_t object) noexcept {
+  if (!restoration_enabled.load(std::memory_order_acquire) || !post_event ||
+      !ShipMotionStopReady() || !object || object == UINT64_MAX) return ShipMotionResult::Rejected;
+  for (const auto& link : kShipMotionLinks)
+    if (event == link.motion) return ship_motion_playback.Submit(event,object,&PostMotion,&StopShipMotion) ?
+        ShipMotionResult::Posted : ShipMotionResult::Rejected;
+  return ShipMotionResult::Rejected;
+}
+bool CancelAuthoredShipMotion(std::uint64_t object) noexcept {
+  return ship_motion_playback.Cancel(object,&StopShipMotion);
+}
+void ServiceAuthoredShipMotion() noexcept {
+  ship_motion_playback.Service(&StopShipMotion);
 }
 }

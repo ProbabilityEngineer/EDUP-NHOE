@@ -28,6 +28,7 @@
 
 #include <windows.h>
 #include "buffer.h"
+#include "trampoline.h"
 
 // Size of each memory block. (= page size of VirtualAlloc)
 #define MEMORY_BLOCK_SIZE 0x1000
@@ -158,7 +159,7 @@ static LPVOID FindNextFreeRegion(LPVOID pAddress, LPVOID pMaxAddr, DWORD dwAlloc
 #endif
 
 //-------------------------------------------------------------------------
-static PMEMORY_BLOCK GetMemoryBlock(LPVOID pOrigin)
+static PMEMORY_BLOCK GetMemoryBlock(LPVOID pOrigin, BOOL reuseOnly)
 {
     PMEMORY_BLOCK pBlock;
 #if defined(_M_X64) || defined(__x86_64__)
@@ -194,10 +195,10 @@ static PMEMORY_BLOCK GetMemoryBlock(LPVOID pOrigin)
             return pBlock;
     }
 
-#if defined(_M_X64) || defined(__x86_64__)
-    if (SkipNearImageAllocation(pOrigin))
+    if (reuseOnly)
         return NULL;
 
+#if defined(_M_X64) || defined(__x86_64__)
     // Alloc a new block above if not found.
     {
         LPVOID pAlloc = pOrigin;
@@ -264,6 +265,7 @@ static PMEMORY_BLOCK GetMemoryBlock(LPVOID pOrigin)
 typedef struct _IMAGE_SLOT
 {
     BOOL used;
+    BOOL discardPending;
     UINT8 contents[MEMORY_SLOT_SIZE];
 } IMAGE_SLOT;
 
@@ -327,7 +329,8 @@ BOOL EnableMainImageFallback(VOID)
             body > nt->OptionalHeader.SizeOfImage - section->VirtualAddress)
             return FALSE;
         body += section->VirtualAddress;
-        first = (body + MEMORY_SLOT_SIZE - 1) & ~(MEMORY_SLOT_SIZE - 1);
+        // A relative jump at the last byte of .text can extend into padding.
+        first = (body + sizeof(JMP_REL) - 1 + MEMORY_SLOT_SIZE - 1) & ~(MEMORY_SLOT_SIZE - 1);
         end = (body + MEMORY_BLOCK_SIZE - 1) & ~(MEMORY_BLOCK_SIZE - 1);
         if (end > nt->OptionalHeader.SizeOfImage || first >= end)
             return FALSE;
@@ -356,7 +359,7 @@ static BOOL IsImageCode(ULONG_PTR address)
 DWORD HookProtectionAfterWrite(LPVOID patch, SIZE_T size, DWORD protection)
 {
     ULONG_PTR address = (ULONG_PTR)patch;
-    if (IsImageCode(address) && size <= g_imageCodeEnd - address &&
+    if (IsImageCode(address) && size <= g_imageSlotStart - address &&
         (address & (MEMORY_BLOCK_SIZE - 1)) + size <= MEMORY_BLOCK_SIZE &&
         protection == PAGE_EXECUTE_WRITECOPY)
         return PAGE_EXECUTE_READ;
@@ -428,6 +431,19 @@ static BOOL WriteImageSlot(ULONG_PTR address, IMAGE_SLOT *slot, const UINT8 *con
     return flushed;
 }
 
+static BOOL FreeImageSlot(ULONG_PTR address, IMAGE_SLOT *slot)
+{
+    static const UINT8 zero[MEMORY_SLOT_SIZE];
+    if (!slot->used)
+        return TRUE;
+    if (!RestoreImageSlotProtection() ||
+        (memcmp(slot->contents, zero, sizeof(zero)) && !WriteImageSlot(address, slot, zero)))
+        return FALSE;
+    slot->used = FALSE;
+    slot->discardPending = FALSE;
+    return TRUE;
+}
+
 static LPVOID AllocateImageSlot(LPVOID origin)
 {
     UINT i;
@@ -435,6 +451,14 @@ static LPVOID AllocateImageSlot(LPVOID origin)
         return NULL;
 
     g_imageNearFailed = TRUE;
+    for (i = 0; i < g_imageSlotCount; ++i)
+    {
+        if (g_imageSlots[i].discardPending)
+            FreeImageSlot(g_imageSlotStart + i * MEMORY_SLOT_SIZE, &g_imageSlots[i]);
+    }
+    if (!RestoreImageSlotProtection())
+        return NULL;
+
     for (i = 0; i < g_imageSlotCount; ++i)
     {
         ULONG_PTR address = g_imageSlotStart + i * MEMORY_SLOT_SIZE;
@@ -447,18 +471,6 @@ static LPVOID AllocateImageSlot(LPVOID origin)
     }
 
     return NULL;
-}
-
-static BOOL FreeImageSlot(ULONG_PTR address, IMAGE_SLOT *slot)
-{
-    static const UINT8 zero[MEMORY_SLOT_SIZE];
-    if (!slot->used)
-        return TRUE;
-    if (!RestoreImageSlotProtection() ||
-        (memcmp(slot->contents, zero, sizeof(zero)) && !WriteImageSlot(address, slot, zero)))
-        return FALSE;
-    slot->used = FALSE;
-    return TRUE;
 }
 
 static BOOL ReleaseImageSlots(VOID)
@@ -503,6 +515,15 @@ DWORD HookProtectionAfterWrite(LPVOID patch, SIZE_T size, DWORD protection)
 }
 #endif
 
+BOOL RestoreBufferProtection(VOID)
+{
+#if defined(_M_X64) || defined(__x86_64__)
+    return RestoreImageSlotProtection();
+#else
+    return TRUE;
+#endif
+}
+
 BOOL CommitBuffer(LPVOID buffer, const UINT8 *contents)
 {
 #if defined(_M_X64) || defined(__x86_64__)
@@ -519,15 +540,30 @@ LPVOID AllocateBuffer(LPVOID pOrigin)
 {
     PMEMORY_SLOT  pSlot;
     PMEMORY_BLOCK pBlock;
-    pBlock = GetMemoryBlock(pOrigin);
+#if defined(_M_X64) || defined(__x86_64__)
+    BOOL preferImage = SkipNearImageAllocation(pOrigin);
+    if (IsImageCode((ULONG_PTR)pOrigin) && !RestoreImageSlotProtection())
+        return NULL;
+    pBlock = GetMemoryBlock(pOrigin, preferImage);
     if (pBlock == NULL)
     {
-#if defined(_M_X64) || defined(__x86_64__)
-        return AllocateImageSlot(pOrigin);
-#else
-        return NULL;
-#endif
+        LPVOID imageSlot = AllocateImageSlot(pOrigin);
+        if (imageSlot != NULL)
+            return imageSlot;
+        if (g_imageRestorePending)
+            return NULL;
+        if (preferImage)
+        {
+            pBlock = GetMemoryBlock(pOrigin, FALSE);
+            if (pBlock != NULL)
+                g_imageNearFailed = FALSE;
+        }
     }
+#else
+    pBlock = GetMemoryBlock(pOrigin, FALSE);
+#endif
+    if (pBlock == NULL)
+        return NULL;
 
     // Remove an unused slot from the list.
     pSlot = pBlock->pFree;
@@ -585,6 +621,21 @@ BOOL FreeBuffer(LPVOID pBuffer)
         pBlock = pBlock->pNext;
     }
     return TRUE;
+}
+
+BOOL DiscardBuffer(LPVOID buffer)
+{
+#if defined(_M_X64) || defined(__x86_64__)
+    IMAGE_SLOT *slot = ImageSlotAt((ULONG_PTR)buffer);
+    if (slot)
+    {
+        if (FreeImageSlot((ULONG_PTR)buffer, slot))
+            return TRUE;
+        slot->discardPending = TRUE;
+        return FALSE;
+    }
+#endif
+    return FreeBuffer(buffer);
 }
 
 //-------------------------------------------------------------------------

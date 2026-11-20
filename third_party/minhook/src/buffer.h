@@ -40,6 +40,8 @@ BOOL   UninitializeBuffer(VOID);
 LPVOID AllocateBuffer(LPVOID pOrigin);
 BOOL   CommitBuffer(LPVOID buffer, const UINT8 *contents);
 BOOL   FreeBuffer(LPVOID pBuffer);
+BOOL   DiscardBuffer(LPVOID buffer);
+BOOL   RestoreBufferProtection(VOID);
 BOOL   IsExecutableAddress(LPVOID pAddress);
 BOOL   EnableMainImageFallback(VOID);
 DWORD  HookProtectionAfterWrite(LPVOID patch, SIZE_T size, DWORD protection);
