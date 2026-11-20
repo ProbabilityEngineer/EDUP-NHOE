@@ -30,7 +30,7 @@ std::atomic<std::uint64_t> queued{0}, dropped{0}, processed{0}, accepted{0}, rej
 std::atomic<std::uint64_t> duplicate_cues{0}, expired_holds{0}, actor_overflows{0}, output_frames{0};
 OnFootHaptics engine;
 ShipWeaponHaptics ship_engine;
-float strength = 0, ship_strength = 0;
+float strength = 0, ship_strength = 0, ship_trigger_strength = 1;
 
 ShipCallbackState& ShipCalls(std::uint64_t object) noexcept {
   return ship_calls[(object ^ (object >> 12) ^ (object >> 24) ^ (object >> 36)) % ship_calls.size()];
@@ -108,6 +108,7 @@ void QueueOnFootInput(const OnFootInput& input) noexcept {
 }
 void SetOnFootFeedbackStrength(float value) noexcept { strength = HapticUnit(value); }
 void SetShipWeaponFeedbackStrength(float value) noexcept { ship_strength = HapticUnit(value); }
+void SetShipWeaponTriggerStrength(float value) noexcept { ship_trigger_strength = HapticUnit(value); }
 void TickOnFootFeedback(bool ready, std::uint64_t now, HapticFrame travel, bool ship_ready) noexcept {
   if (!configured.load(std::memory_order_acquire)) {
     XInputOutputSetOnFootFrame(travel,HapticNonzero(travel));
@@ -146,8 +147,9 @@ void TickOnFootFeedback(bool ready, std::uint64_t now, HapticFrame travel, bool 
   if (!ship_ready) { SetActivity(ship_activity,false); ship_engine.SetActive(false); }
   // A ship voice with unresolved calls can have a release in flight. Other
   // emitters remain audible after the completed results have been drained.
-  const auto ship_frame = ship_ready ?
+  auto ship_frame = ship_ready ?
       HapticScale(ship_engine.Sample(now,&ShipCallPending),ship_strength) : HapticFrame{};
+  ship_frame.left *= ship_trigger_strength; ship_frame.right *= ship_trigger_strength;
   const auto frame = HapticMaximum(HapticScale(engine.Sample(now),strength),ship_frame);
   if (HapticNonzero(frame)) output_frames.fetch_add(1,std::memory_order_relaxed);
   XInputOutputSetOnFootFrame(HapticMaximum(frame, travel), ready || ship_ready || HapticNonzero(travel));

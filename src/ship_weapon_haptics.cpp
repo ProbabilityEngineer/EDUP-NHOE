@@ -55,22 +55,26 @@ struct Shape {
   std::uint32_t duration_ms, attack_ms;
   HapticFrame onset, sustain;
 };
-// Ship-mounted effects use the same two main motors across all backends.
 // Low motor conveys weight; high motor supplies the sharper firing texture.
+// Experimental: each shot also kicks both trigger motors (which trigger fires
+// a given weapon is unknown from audio events). Trigger channels reach only
+// four-motor outputs (macOS companion, GameInput with trigger motors); the
+// two-motor paths ignore them, so those backends feel exactly as before.
+// [ShipCombat] TriggerStrength in ed-onfoot-haptics.ini scales or disables it.
 constexpr Shape kShapes[] = {
-    {0, 60, {.15f,.25f}, {.09f,.15f}},  // Beam
-    {76, 0, {.36f,.28f}, {}},           // Multicannon
-    {65, 0, {.10f,.32f}, {}},           // Pulse laser
-    {85, 0, {.15f,.35f}, {}},           // Burst laser
-    {135, 0, {.43f,.33f}, {}},          // Plasma accelerator
-    {70, 0, {.16f,.32f}, {}},           // Plasma repeater
-    {120, 24, {.33f,.25f}, {}},         // Missile
-    {195, 38, {.49f,.24f}, {}},         // Torpedo
-    {92, 0, {.28f,.23f}, {}},           // Flak
-    {105, 0, {.45f,.36f}, {}},          // Fragment cannon
-    {115, 18, {.23f,.15f}, {}},         // Mine
-    {0, 65, {.08f,.14f}, {.04f,.08f}},  // Mining laser
-    {100, 14, {.27f,.23f}, {}},         // Seismic charge launcher
+    {0, 60, {.15f,.25f,.25f,.25f}, {.09f,.15f,.12f,.12f}},  // Beam
+    {76, 0, {.36f,.28f,.45f,.45f}, {}},                     // Multicannon
+    {65, 0, {.10f,.32f,.30f,.30f}, {}},                     // Pulse laser
+    {85, 0, {.15f,.35f,.35f,.35f}, {}},                     // Burst laser
+    {135, 0, {.43f,.33f,.60f,.60f}, {}},                    // Plasma accelerator
+    {70, 0, {.16f,.32f,.35f,.35f}, {}},                     // Plasma repeater
+    {120, 24, {.33f,.25f,.40f,.40f}, {}},                   // Missile
+    {195, 38, {.49f,.24f,.55f,.55f}, {}},                   // Torpedo
+    {92, 0, {.28f,.23f,.45f,.45f}, {}},                     // Flak
+    {105, 0, {.45f,.36f,.55f,.55f}, {}},                    // Fragment cannon
+    {115, 18, {.23f,.15f,.30f,.30f}, {}},                   // Mine
+    {0, 65, {.08f,.14f,.12f,.12f}, {.04f,.08f,.06f,.06f}},  // Mining laser
+    {100, 14, {.27f,.23f,.40f,.40f}, {}},                   // Seismic charge launcher
 };
 constexpr std::uint32_t kSizePercent[] = {65, 80, 100, 120, 140};
 const Shape& Pattern(const ShipWeaponProfile& profile) noexcept {
@@ -87,8 +91,8 @@ std::uint64_t Deadline(std::uint64_t now, std::uint64_t duration) noexcept {
   return now > maximum - duration ? maximum : now + duration;
 }
 HapticFrame ToMotors(HapticFrame from, HapticFrame to, float balance, float gain) noexcept {
-  return {HapticUnit((from.low + balance * (to.low - from.low)) * gain),
-          HapticUnit((from.high + balance * (to.high - from.high)) * gain)};
+  const auto blend = [&](float a, float b) { return HapticUnit((a + balance * (b - a)) * gain); };
+  return {blend(from.low, to.low), blend(from.high, to.high), blend(from.left, to.left), blend(from.right, to.right)};
 }
 }  // namespace
 

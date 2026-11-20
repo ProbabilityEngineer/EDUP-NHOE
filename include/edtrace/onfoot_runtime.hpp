@@ -13,6 +13,8 @@ void StartOnFootFeedback(float strength, bool ship_enabled = false, float ship_s
                          bool onfoot_enabled = true) noexcept;
 void SetOnFootFeedbackStrength(float strength) noexcept;
 void SetShipWeaponFeedbackStrength(float strength) noexcept;
+// Scales the ship weapons' trigger-motor kick (0 disables it). Default 1.
+void SetShipWeaponTriggerStrength(float strength) noexcept;
 ShipWeaponAdmission BeginShipWeaponInput(OnFootInputKind kind, std::uint64_t object, std::uint32_t id) noexcept;
 void QueueOnFootInput(const OnFootInput& input) noexcept;
 // One existing restoration worker owns policy and output. Time is supplied
