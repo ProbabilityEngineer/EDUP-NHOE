@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Match a weapon_capture.sh timeline against an onfoot-events capture.
+"""Match a weapon-firing timeline against an onfoot-events capture.
+
+The timeline (timeline.tsv) is tab-separated with a header line and columns
+epoch_ms, time, event. Events used: "recording started ...",
+"baseline quiet start", then per weapon "ready <weapon>", "fire <weapon>",
+"stop <weapon>", and finally "marker removed". Any recorder that writes those
+rows while the ed-onfoot-trace.enable capture is running works; epoch_ms is
+wall-clock Unix time in milliseconds, matched to the capture through its
+QPC/FILETIME anchor.
 
 A weapon's window runs from its spoken "fire" to the next "get ready" (so
 shots fired past "stop" still count). Background is everything posted during
@@ -10,7 +18,7 @@ role, LOD), and reports which existing mappings matched and whether the sound
 actually played (returned_playing_id != 0).
 
 Usage:
-  tools/weapon_capture_report.py <capture dir with timeline.tsv> <onfoot-events-*.jsonl> [--json out.json]
+  tools/weapon_capture_report.py <dir with timeline.tsv> <onfoot-events-*.jsonl> [--json out.json]
 Output is Markdown on stdout.
 """
 import argparse
