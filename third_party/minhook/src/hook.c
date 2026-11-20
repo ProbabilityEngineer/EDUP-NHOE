@@ -429,11 +429,13 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
 
     // EDUP-NHOE: never restore a copy-on-write protection. The write just made
     // the page private; putting PAGE_*WRITECOPY back can drop that copy and
-    // bring back the image's original bytes. Keep modifier bits.
+    // bring back the image's original bytes. Copy-on-write pages are writable,
+    // so keep write access (a read-only substitute faults later writes).
+    // Keep modifier bits.
     switch (oldProtect & 0xFF)
     {
-    case PAGE_WRITECOPY:         oldProtect = PAGE_READONLY     | (oldProtect & ~0xFFu); break;
-    case PAGE_EXECUTE_WRITECOPY: oldProtect = PAGE_EXECUTE_READ | (oldProtect & ~0xFFu); break;
+    case PAGE_WRITECOPY:         oldProtect = PAGE_READWRITE         | (oldProtect & ~0xFFu); break;
+    case PAGE_EXECUTE_WRITECOPY: oldProtect = PAGE_EXECUTE_READWRITE | (oldProtect & ~0xFFu); break;
     }
     VirtualProtect(pPatchTarget, patchSize, oldProtect, &oldProtect);
 

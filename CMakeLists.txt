@@ -110,6 +110,9 @@ set_target_properties(dinput_crossover_proxy PROPERTIES PREFIX "" OUTPUT_NAME di
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/crossover-dinput8")
 
 if(BUILD_TESTING)
+  add_executable(page_protection_verification verification/page_protection.cpp)
+  trace_settings(page_protection_verification)
+  target_link_options(page_protection_verification PRIVATE -municode)
   add_executable(motor_headroom_slot_verification verification/motor_headroom_slot.cpp src/motor_headroom.cpp)
   trace_settings(motor_headroom_slot_verification)
   target_include_directories(motor_headroom_slot_verification PRIVATE third_party/minhook/include)

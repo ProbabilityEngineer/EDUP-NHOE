@@ -74,6 +74,8 @@ def main():
             run("output_" + mode, build / "xinput_output_verification.exe", [backend, mode], result=True)
             run("crossover_output_" + mode, build / "crossover_output_verification.exe", [backend, mode], result=True)
         run("crossover_output_alias", build / "crossover_output_verification.exe", [backend, "alias"], result=True)
+        run("page_protection_copy_on_write", build / "page_protection_verification.exe", result=True)
+        run("page_protection_readonly_reproduces_fault", build / "page_protection_verification.exe", ["readonly"], result=True)
         run("motor_headroom_frame_slot", build / "motor_headroom_slot_verification.exe")
         run("motor_headroom_foreign_slot", build / "motor_headroom_slot_verification.exe", ["foreign"])
         run("motor_headroom_initialize_failure", build / "motor_headroom_slot_verification.exe", ["initialize"])
