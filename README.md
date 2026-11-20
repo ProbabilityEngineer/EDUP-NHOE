@@ -2,13 +2,13 @@
 
 **Native Haptics Odyssey Expanded** restores the vibration Elite Dangerous already authored and adds new feedback for Odyssey actions and other mapped gameplay cues. The runtime handles haptic output through gamepads and compatible VR frontends. Elite retains control of input, bindings and event timing.
 
-The current public test preview is **0.12.1-preview.5**. The changelog tracks development previews separately. [Public preview](https://github.com/Fenris159/EDUP-NHOE/releases/tag/v0.12.1-preview.5) · [Changelog](CHANGELOG.md)
+The current public test preview is **0.12.1-preview.8**. The changelog tracks development previews separately. [Public preview](https://github.com/Fenris159/EDUP-NHOE/releases/tag/v0.12.1-preview.8) · [Changelog](CHANGELOG.md)
 
 ## Download and install
 
-- [Windows x64 preview](https://github.com/Fenris159/EDUP-NHOE/releases/download/v0.12.1-preview.5/EDUP-NHOE-0.12.1-preview.5-windows-x64.zip)
-- [Linux / Proton x64 preview](https://github.com/Fenris159/EDUP-NHOE/releases/download/v0.12.1-preview.5/EDUP-NHOE-0.12.1-preview.5-linux-proton-x64.zip)
-- [Mac / CrossOver gamepad preview](https://github.com/Fenris159/EDUP-NHOE/releases/download/v0.12.1-preview.5/EDUP-NHOE-0.12.1-preview.5-macos-crossover-x64.zip)
+- [Windows x64 preview](https://github.com/Fenris159/EDUP-NHOE/releases/download/v0.12.1-preview.8/EDUP-NHOE-0.12.1-preview.8-windows-x64.zip)
+- [Linux / Proton x64 preview](https://github.com/Fenris159/EDUP-NHOE/releases/download/v0.12.1-preview.8/EDUP-NHOE-0.12.1-preview.8-linux-proton-x64.zip)
+- [Mac / CrossOver gamepad preview](https://github.com/Fenris159/EDUP-NHOE/releases/download/v0.12.1-preview.8/EDUP-NHOE-0.12.1-preview.8-macos-crossover-x64.zip)
 - [All releases and checksums](https://github.com/Fenris159/EDUP-NHOE/releases)
 
 Close the game and launcher, back up matching mod files, and copy the **contents** of `Copy-to-game` beside `EliteDangerous64.exe`. Keep the support folder intact and retain your existing settings. Follow the ZIP's `INSTALL.txt` for your platform and check its instructions for existing DirectInput proxies.
