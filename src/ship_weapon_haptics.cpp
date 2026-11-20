@@ -64,9 +64,11 @@ struct Shape {
 };
 // Low motor conveys weight; high motor supplies the sharper firing texture.
 // Each shot also kicks both trigger motors (which trigger fires a given
-// weapon is unknown from audio events). Trigger channels reach only
-// four-motor outputs (macOS companion, GameInput with trigger motors); the
-// two-motor paths ignore them, so those backends feel exactly as before.
+// weapon is unknown from audio events). These are EDUP patterns, not recovered
+// Frontier curves. The macOS companion and GameInput with trigger motors play
+// them on the triggers; XInput ignores them. OpenXR controllers without
+// trigger actuators blend each trigger into its hand's vibration, so VR
+// feedback is stronger where the trigger level exceeds the hand level.
 // [ShipCombat] TriggerStrength in ed-onfoot-haptics.ini scales or disables it.
 constexpr Shape kShapes[] = {
     {0, 60, {.15f,.25f,.25f,.25f}, {.09f,.15f,.12f,.12f}},  // Beam
